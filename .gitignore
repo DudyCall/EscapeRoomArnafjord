@@ -1,0 +1,49 @@
+# Unity: generated folders
+/ArnafjordurEscapeRoom/[Ll]ibrary/
+/ArnafjordurEscapeRoom/[Tt]emp/
+/ArnafjordurEscapeRoom/[Oo]bj/
+/ArnafjordurEscapeRoom/[Bb]uild/
+/ArnafjordurEscapeRoom/[Bb]uilds/
+/ArnafjordurEscapeRoom/[Ll]ogs/
+/ArnafjordurEscapeRoom/[Uu]ser[Ss]ettings/
+/ArnafjordurEscapeRoom/[Mm]emoryCaptures/
+/ArnafjordurEscapeRoom/[Rr]ecordings/
+
+# Unity / IDE: generated project files
+*.csproj
+*.sln
+*.slnx
+*.suo
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.unityproj
+.vs/
+.vscode/
+.idea/
+*.pdb
+*.mdb
+*.pidb.meta
+*.pdb.meta
+*.mdb.meta
+sysinfo.txt
+crashlytics-build.properties
+
+# Blender: backups and script output
+*.blend1
+*.blend2
+/Environment/Blender/out_*/
+/Environment/Blender/__pycache__/
+__pycache__/
+
+# Claude Code local settings
+.claude/settings.local.json
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# The Unity project used to be its own repository; its old .git is kept here, untracked
+/.inner-git-backup/
