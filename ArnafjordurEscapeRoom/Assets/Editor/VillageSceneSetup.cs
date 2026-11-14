@@ -34,6 +34,7 @@ namespace Arnafjordur.Editor
             "Exit_Terrain",
             "Exit_Road",
             "ChurchForecourt",
+            "VillageBeach",
         };
 
         [Serializable]
@@ -138,8 +139,9 @@ namespace Arnafjordur.Editor
             Physics.SyncTransforms();
 
             WalkableFile walkableData = JsonUtility.FromJson<WalkableFile>(File.ReadAllText(WalkableJsonPath));
-            var walkableArea = BuildWalkableAndFootpaths(walkableData);
             BuildBeach(walkableData);
+            Physics.SyncTransforms();
+            var walkableArea = BuildWalkableAndFootpaths(walkableData);
             FjordWaterSetup.ApplyToExisting();
 
             CharacterMotor[] motors = ExtractAndConfigurePlayers(exit, carGo, walkableArea, locomotionControllers, idleClips);
@@ -154,7 +156,7 @@ namespace Arnafjordur.Editor
             EditorSceneManager.SaveScene(scene, ScenePath);
 
             VerifyWalkableConstraints(walkableArea, walkableData, motors);
-            RenderPreviewFrames(cam);
+            RenderPreviewFrames(cam, motors);
 
             var buildScenes = EditorBuildSettings.scenes.ToList();
             if (buildScenes.All(s => s.path != ScenePath))
@@ -290,10 +292,16 @@ namespace Arnafjordur.Editor
             {
                 foreach (ZoneData z in data.zones)
                 {
+                    Vector3[] outline = z.outline ?? Array.Empty<Vector3>();
+                    if (z.name == "Beach" && outline.Length >= 3)
+                    {
+                        outline = StraightenBeachZoneOutline(outline, data.seaLevel);
+                    }
+
                     zones.Add(new WalkableArea.Zone
                     {
                         name = z.name,
-                        outline = z.outline ?? Array.Empty<Vector3>(),
+                        outline = outline,
                     });
                 }
             }
@@ -472,7 +480,124 @@ namespace Arnafjordur.Editor
         private const string BeachGlossPath = VillageAssetDir + "/Beach_Sand_Gloss.png";
         private const string BeachMatPath = VillageAssetDir + "/Mat_Beach_Sand.mat";
         private const string BeachMeshPath = VillageAssetDir + "/Beach_Sand.asset";
+        private const string BeachTerrainMeshPath = VillageAssetDir + "/Exit_Terrain_VillageBeach.asset";
         private const string TerrainDetailPath = "Assets/Environment/TunnelExit/Textures/Exit_Terrain_Detail.png";
+
+        private static void GetBeachEnvelope(float z, out float xTop, out float xShore)
+        {
+            float houseGuard = 3.8f * Mathf.Exp(-Mathf.Pow((z - 324.5f) / 7.5f, 2f));
+            float northGuard = 2.5f * Smooth(385f, 405f, z);
+            xTop = 415.0f + houseGuard + northGuard;
+            float tz = Mathf.Clamp01((z - 308f) / (403f - 308f));
+            xShore = Mathf.Lerp(451.5f, 430.0f, tz);
+        }
+
+        private static Vector3[] StraightenBeachZoneOutline(Vector3[] outline, float seaLevel)
+        {
+            int nwIdx = -1;
+            for (int i = 1; i < outline.Length; i++)
+            {
+                if (outline[i].z >= 400f && outline[i].x < 420f)
+                {
+                    nwIdx = i;
+                    break;
+                }
+            }
+
+            if (nwIdx <= 1)
+            {
+                return outline;
+            }
+
+            float zSouth = outline[0].z;
+            float zNorth = outline[nwIdx].z;
+            GetBeachEnvelope(zSouth, out _, out float xShoreSouth);
+            GetBeachEnvelope(zNorth, out _, out float xShoreNorth);
+
+            var result = new List<Vector3>(outline.Length - (nwIdx - 1) + 2)
+            {
+                outline[0],
+                new Vector3(xShoreSouth - 0.8f, seaLevel + 0.1f, zSouth),
+                new Vector3(xShoreNorth - 0.8f, seaLevel + 0.1f, zNorth),
+            };
+            for (int i = nwIdx; i < outline.Length; i++)
+            {
+                result.Add(outline[i]);
+            }
+
+            return result.ToArray();
+        }
+
+        private static void FitTerrainUnderBeach(GameObject terrainGo, float sea)
+        {
+            if (terrainGo == null || !terrainGo.TryGetComponent(out MeshFilter mf) || mf.sharedMesh == null)
+            {
+                return;
+            }
+
+            Mesh source = mf.sharedMesh;
+            Transform tf = terrainGo.transform;
+            Vector3[] local = source.vertices;
+            int lowered = 0;
+
+            for (int i = 0; i < local.Length; i++)
+            {
+                Vector3 w = tf.TransformPoint(local[i]);
+                if (w.x < 420f || w.x > 456f || w.z < 308f || w.z > 405f)
+                {
+                    continue;
+                }
+
+                GetBeachEnvelope(w.z, out float xTop, out float xShore);
+                float yTop = -85.6f - 0.35f * Mathf.Sin((w.z - 310f) / 90f * Mathf.PI);
+                float width = Mathf.Max(12f, xShore - xTop);
+                float u = (w.x - xTop) / width;
+
+                float targetY;
+                if (u <= 1f)
+                {
+                    float s = 1f - Mathf.Pow(1f - Mathf.Clamp01(u), 1.35f);
+                    targetY = Mathf.Lerp(yTop, sea, s) - 0.14f;
+                }
+                else
+                {
+                    targetY = sea - (w.x - xShore) * 0.14f - 0.14f;
+                }
+
+                if (w.x < 425f && w.z >= 318f && w.z <= 330f)
+                {
+                    targetY = Mathf.Max(targetY, w.y - 0.35f);
+                }
+
+                if (targetY < w.y)
+                {
+                    w.y = targetY;
+                    local[i] = tf.InverseTransformPoint(w);
+                    lowered++;
+                }
+            }
+
+            if (lowered == 0)
+            {
+                return;
+            }
+
+            Mesh fitted = UnityEngine.Object.Instantiate(source);
+            fitted.name = "Exit_Terrain_VillageBeach";
+            fitted.vertices = local;
+            fitted.RecalculateNormals();
+            fitted.RecalculateBounds();
+            AssetDatabase.DeleteAsset(BeachTerrainMeshPath);
+            AssetDatabase.CreateAsset(fitted, BeachTerrainMeshPath);
+
+            mf.sharedMesh = fitted;
+            if (terrainGo.TryGetComponent(out MeshCollider mc))
+            {
+                mc.sharedMesh = fitted;
+            }
+
+            Physics.SyncTransforms();
+        }
 
         private static void BuildBeach(WalkableFile data)
         {
@@ -503,112 +628,91 @@ namespace Arnafjordur.Editor
             z1 = z0 + (nz - 1) * BeachGridStep;
 
             GameObject terrainGo = GameObject.Find("Exit_Terrain");
+            FitTerrainUnderBeach(terrainGo, sea);
             Collider terrain = terrainGo != null ? terrainGo.GetComponent<Collider>() : null;
-            // sampled twice as fine as the mesh, so the sharp edge where the land drops into the fjord is found
-            int fx = nx * 2 - 1, fz = nz * 2 - 1;
-            var fine = new float[fx * fz];
-            for (int j = 0; j < fz; j++)
+
+            var rawH = new float[nx * nz];
+            for (int j = 0; j < nz; j++)
             {
-                for (int i = 0; i < fx; i++)
+                float z = z0 + j * BeachGridStep;
+                for (int i = 0; i < nx; i++)
                 {
-                    float x = x0 + i * BeachGridStep * 0.5f;
-                    float z = z0 + j * BeachGridStep * 0.5f;
+                    float x = x0 + i * BeachGridStep;
                     if (terrain != null && terrain.Raycast(new Ray(new Vector3(x, 40f, z), Vector3.down), out RaycastHit hit, 220f))
                     {
-                        fine[j * fx + i] = hit.point.y;
+                        rawH[j * nx + i] = hit.point.y;
                     }
                     else
                     {
-                        fine[j * fx + i] = SurfaceY(new Vector3(x, 0f, z), includeFootpaths: false);
+                        rawH[j * nx + i] = SurfaceY(new Vector3(x, 0f, z), includeFootpaths: false);
                     }
                 }
+            }
+
+            // ---- flatten the beach into a straight, gentle coastal slope down to the shoreline
+            var rawTop = new float[nz];
+            var xTops = new float[nz];
+            var xShores = new float[nz];
+            for (int j = 0; j < nz; j++)
+            {
+                float z = z0 + j * BeachGridStep;
+                GetBeachEnvelope(z, out float xTop, out float xShore);
+                xTops[j] = xTop;
+                xShores[j] = xShore;
+                float sampledTop = SampleGrid(rawH, nx, nz, (xTop - x0) / BeachGridStep, j);
+                rawTop[j] = Mathf.Min(sampledTop, sea + 3.65f);
+            }
+
+            var yTop = new float[nz];
+            Array.Copy(rawTop, yTop, nz);
+            for (int pass = 0; pass < 16; pass++)
+            {
+                var next = new float[nz];
+                next[0] = yTop[0];
+                next[nz - 1] = yTop[nz - 1];
+                for (int j = 1; j < nz - 1; j++)
+                {
+                    next[j] = 0.25f * yTop[j - 1] + 0.5f * yTop[j] + 0.25f * yTop[j + 1];
+                }
+
+                yTop = next;
             }
 
             var heights = new float[nx * nz];
             for (int j = 0; j < nz; j++)
             {
+                float z = z0 + j * BeachGridStep;
+                float xTop = xTops[j];
+                float xShore = xShores[j];
+                float width = Mathf.Max(12f, xShore - xTop);
+                float shoreSlope = Mathf.Max(0.11f, (yTop[j] - sea) / width * 0.85f);
+                float alongBlend = Smooth(z0 + 2f, z0 + 10f, z) * (1f - Smooth(z1 - 10f, z1 - 2f, z));
+
                 for (int i = 0; i < nx; i++)
                 {
-                    float lo = float.PositiveInfinity, hi = float.NegativeInfinity;
-                    for (int dj = -2; dj <= 2; dj++)
+                    int k = j * nx + i;
+                    float x = x0 + i * BeachGridStep;
+                    if (x <= xTop)
                     {
-                        for (int di = -2; di <= 2; di++)
-                        {
-                            int si = Mathf.Clamp(i * 2 + di, 0, fx - 1);
-                            int sj = Mathf.Clamp(j * 2 + dj, 0, fz - 1);
-                            float s = fine[sj * fx + si];
-                            lo = Mathf.Min(lo, s);
-                            hi = Mathf.Max(hi, s);
-                        }
+                        heights[k] = rawH[k];
+                        continue;
                     }
 
-                    // where the ground is steep or creased (the bank down to the water), sit on the highest
-                    // ground within a metre so no edge pokes through between the grid points; on the
-                    // gentle rest of the beach just follow the terrain
-                    float centre = fine[j * 2 * fx + i * 2];
-                    heights[j * nx + i] = Mathf.Lerp(centre, hi, Smooth(0.3f, 0.7f, hi - lo));
-                }
-            }
-
-            // ---- at the water's edge the terrain drops straight to the fjord floor; carry the sand on from
-            // the last bit of land in a gentle slope instead, so it runs into the water like a beach and
-            // the shallows and the foam have some width
-            var shoreDist = new float[nx * nz];
-            var shoreHeight = new float[nx * nz]; // height of the nearest land
-            for (int k = 0; k < shoreDist.Length; k++)
-            {
-                // land never sits lower than 0.25 m above the sea; anything below that is the drop-off face
-                shoreDist[k] = heights[k] >= sea + 0.2f ? 0f : 1e6f;
-                shoreHeight[k] = heights[k];
-            }
-
-            for (int pass = 0; pass < 2; pass++)
-            {
-                int dir = pass == 0 ? 1 : -1;
-                for (int jj = 0; jj < nz; jj++)
-                {
-                    int j = pass == 0 ? jj : nz - 1 - jj;
-                    for (int ii = 0; ii < nx; ii++)
+                    float u = (x - xTop) / width;
+                    float targetY;
+                    if (u <= 1f)
                     {
-                        int i = pass == 0 ? ii : nx - 1 - ii;
-                        int self = j * nx + i;
-                        int pj = j - dir;
-
-                        void Relax(int from, float step)
-                        {
-                            if (shoreDist[from] + step < shoreDist[self])
-                            {
-                                shoreDist[self] = shoreDist[from] + step;
-                                shoreHeight[self] = shoreHeight[from];
-                            }
-                        }
-
-                        if (i - dir >= 0 && i - dir < nx)
-                        {
-                            Relax(self - dir, BeachGridStep);
-                        }
-
-                        if (pj >= 0 && pj < nz)
-                        {
-                            Relax(pj * nx + i, BeachGridStep);
-                            for (int di = -1; di <= 1; di += 2)
-                            {
-                                if (i + di >= 0 && i + di < nx)
-                                {
-                                    Relax(pj * nx + i + di, BeachGridStep * 1.4142f);
-                                }
-                            }
-                        }
+                        float s = 1f - Mathf.Pow(1f - u, 1.35f);
+                        targetY = Mathf.Lerp(yTop[j], sea, s);
                     }
-                }
-            }
+                    else
+                    {
+                        targetY = Mathf.Max(sea - (x - xShore) * shoreSlope, sea - 8f);
+                    }
 
-            for (int k = 0; k < heights.Length; k++)
-            {
-                if (shoreDist[k] > 0f)
-                {
-                    float run = Mathf.Max(shoreDist[k] - 1f, 0f);
-                    heights[k] = Mathf.Max(shoreHeight[k] + 0.08f - 0.16f * run, sea - 8f); // a touch proud of the terrain's edge
+                    float crossBlend = Smooth(0f, 3.5f, x - xTop);
+                    float blendedHeight = Mathf.Lerp(rawH[k], targetY, alongBlend * crossBlend);
+                    heights[k] = Mathf.Max(blendedHeight, rawH[k]);
                 }
             }
 
@@ -732,7 +836,8 @@ namespace Arnafjordur.Editor
                 for (int i = 0; i < nx; i++)
                 {
                     int k = j * nx + i;
-                    verts[k] = new Vector3(x0 + i * BeachGridStep, heights[k] + BeachLift, z0 + j * BeachGridStep);
+                    float lift = BeachLift * Smooth(sea + 4.4f, sea + 3.2f, heights[k]);
+                    verts[k] = new Vector3(x0 + i * BeachGridStep, heights[k] + lift, z0 + j * BeachGridStep);
                     uvs[k] = new Vector2(i / (float)(nx - 1), j / (float)(nz - 1));
                     maybeSand[k] = heights[k] - sea < 5.6f;
                 }
@@ -774,6 +879,7 @@ namespace Arnafjordur.Editor
             var renderer = go.AddComponent<MeshRenderer>();
             renderer.sharedMaterial = mat;
             renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            go.AddComponent<MeshCollider>().sharedMesh = mesh;
         }
 
         private static Texture2D SaveBeachTexture(string path, Color32[] pixels, int w, int h, bool srgb)
@@ -1265,7 +1371,7 @@ namespace Arnafjordur.Editor
             return $"  Continuity {label}: samples={totalSamples}, outside={outsideCount}, missingGround={missingGroundCount}, maxStepDy={maxStepDy:F3}m, maxSlope={maxSlopeDeg:F1}deg";
         }
 
-        private static void RenderPreviewFrames(Camera cam)
+        private static void RenderPreviewFrames(Camera cam, CharacterMotor[] motors)
         {
             try
             {
@@ -1305,6 +1411,50 @@ namespace Arnafjordur.Editor
                 LookShot("village_overview.png",
                     new Vector3(355f, -55f, 255f),
                     new Vector3(412f, -84f, 345f), 42f);
+
+                if (cam.TryGetComponent(out ThirdPersonCameraRig cameraRig))
+                {
+                    cameraRig.SetFirstPerson(true, snap: true);
+                    Shot(cam, Path.Combine(previewDir, "village_firstperson.png"));
+                    cameraRig.SetFirstPerson(false, snap: true);
+                }
+
+                if (motors != null && motors.Length > 0 && motors[0] != null)
+                {
+                    CharacterMotor player = motors[0];
+                    var cc = player.GetComponent<CharacterController>();
+                    Vector3 keepCharPos = player.transform.position;
+                    Quaternion keepCharRot = player.transform.rotation;
+
+                    Vector3 beachStart = new Vector3(434f, SurfaceY(new Vector3(434f, 0f, 338f), false) + 0.15f, 338f);
+                    if (cc != null) cc.enabled = false;
+                    player.transform.SetPositionAndRotation(beachStart, Quaternion.Euler(0f, 8f, 0f));
+                    if (cc != null) cc.enabled = true;
+                    Physics.SyncTransforms();
+
+                    if (cc != null)
+                    {
+                        for (int step = 0; step < 20; step++)
+                        {
+                            cc.Move(new Vector3(0.02f, -0.08f, 0.20f));
+                            Physics.SyncTransforms();
+                        }
+                    }
+
+                    Vector3 walkedPos = player.transform.position;
+                    float beachY = SurfaceY(walkedPos, false);
+                    bool grounded = cc != null && cc.isGrounded;
+                    Debug.Log($"[VillageSceneSetup] Beach walk test: pos={walkedPos:F2}, surfaceY={beachY:F2}, grounded={grounded}");
+
+                    LookShot("village_beach_player.png",
+                        walkedPos + new Vector3(-1.4f, 2.1f, -4.2f),
+                        walkedPos + new Vector3(0.8f, 0.8f, 6.0f), 46f);
+
+                    if (cc != null) cc.enabled = false;
+                    player.transform.SetPositionAndRotation(keepCharPos, keepCharRot);
+                    if (cc != null) cc.enabled = true;
+                    Physics.SyncTransforms();
+                }
 
                 cam.transform.SetPositionAndRotation(keepPos, keepRot);
                 cam.fieldOfView = keepFov;

@@ -1,10 +1,13 @@
+using System;
 using UnityEngine;
 using UnityEngine.InputSystem;
+using UnityEngine.Rendering;
 
 namespace Arnafjordur.Characters
 {
     /// <summary>
-    /// Smooth third-person orbit camera that follows the active character and supports right-drag/Q-E orbit and wheel zoom.
+    /// Smooth third-person orbit and switchable first-person camera that follows the active character,
+    /// supporting right-drag/Q-E look/orbit, wheel zoom (including zoom-in transition), and V/C view toggling.
     /// </summary>
     public sealed class ThirdPersonCameraRig : MonoBehaviour
     {
@@ -25,11 +28,38 @@ namespace Arnafjordur.Characters
         [SerializeField, Tooltip("Slide in front of hillsides and houses that come between the camera and the character.")]
         private bool avoidObstacles = true;
 
+        [Header("First Person")]
+        [SerializeField] private bool firstPerson;
+        [SerializeField] private float firstPersonEyeHeight = 1.60f;
+        [SerializeField] private float firstPersonForwardOffset = 0.06f;
+        [SerializeField] private float firstPersonMinPitch = -70f;
+        [SerializeField] private float firstPersonMaxPitch = 75f;
+        [SerializeField] private float thirdPersonFov = 45f;
+        [SerializeField] private float firstPersonFov = 65f;
+
         private static readonly RaycastHit[] Hits = new RaycastHit[16];
 
         private Vector3 _smoothedFocus;
         private Vector3 _focusVelocity;
         private bool _hasInitializedFocus;
+        private Camera _camera;
+        private Transform _hiddenTarget;
+        private CharacterMotor _targetMotor;
+
+        /// <summary>Carries the player's first-person preference across runtime scene loads (intro into village).</summary>
+        public static bool SessionFirstPersonPreference { get; set; }
+
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        private static void ResetSessionPreference()
+        {
+            SessionFirstPersonPreference = false;
+        }
+
+        /// <summary>Fired whenever first-person mode is enabled or disabled.</summary>
+        public event Action<bool> ViewModeChanged;
+
+        /// <summary>True when first-person view is currently active.</summary>
+        public bool IsFirstPerson => firstPerson;
 
         /// <summary>Current horizontal orbit angle in degrees.</summary>
         public float Yaw => yaw;
@@ -45,10 +75,34 @@ namespace Arnafjordur.Characters
         /// </summary>
         public void SetTarget(Transform newTarget, bool snap = false)
         {
+            if (newTarget != target && _hiddenTarget != null)
+            {
+                SetTargetHidden(_hiddenTarget, false);
+                _hiddenTarget = null;
+            }
+
+            if (newTarget != target && _targetMotor != null)
+            {
+                _targetMotor.LookYawOverride = null;
+                _targetMotor = null;
+            }
+
             target = newTarget;
             if (target == null)
             {
                 return;
+            }
+
+            target.TryGetComponent(out _targetMotor);
+            if (firstPerson)
+            {
+                yaw = target.eulerAngles.y;
+                SetTargetHidden(target, true);
+                _hiddenTarget = target;
+                if (_targetMotor != null)
+                {
+                    _targetMotor.LookYawOverride = yaw;
+                }
             }
 
             if (snap || !_hasInitializedFocus)
@@ -58,6 +112,85 @@ namespace Arnafjordur.Characters
                 _hasInitializedFocus = true;
                 ApplyTransform();
             }
+        }
+
+        /// <summary>Toggles between third-person orbit and first-person view.</summary>
+        public void ToggleFirstPerson()
+        {
+            SetFirstPerson(!firstPerson, snap: true);
+        }
+
+        /// <summary>Enables or disables first-person view cleanly, restoring character visibility when exited.</summary>
+        public void SetFirstPerson(bool enabled, bool snap = true)
+        {
+            bool changed = firstPerson != enabled;
+            firstPerson = enabled;
+            if (Application.isPlaying)
+            {
+                SessionFirstPersonPreference = enabled;
+            }
+
+            EnsureCamera();
+
+            if (enabled)
+            {
+                if (changed && target != null)
+                {
+                    yaw = target.eulerAngles.y;
+                    pitch = 0f;
+                }
+
+                if (target != null)
+                {
+                    target.TryGetComponent(out _targetMotor);
+                    SetTargetHidden(target, true);
+                    _hiddenTarget = target;
+                    if (_targetMotor != null)
+                    {
+                        _targetMotor.LookYawOverride = yaw;
+                    }
+                }
+
+                if (_camera != null)
+                {
+                    _camera.fieldOfView = firstPersonFov;
+                    _camera.nearClipPlane = 0.05f;
+                }
+            }
+            else
+            {
+                if (_hiddenTarget != null)
+                {
+                    SetTargetHidden(_hiddenTarget, false);
+                    _hiddenTarget = null;
+                }
+                else if (target != null)
+                {
+                    SetTargetHidden(target, false);
+                }
+
+                if (_targetMotor != null)
+                {
+                    _targetMotor.LookYawOverride = null;
+                }
+
+                pitch = Mathf.Clamp(pitch, minPitch, maxPitch);
+                if (_camera != null)
+                {
+                    _camera.fieldOfView = thirdPersonFov;
+                    _camera.nearClipPlane = 0.15f;
+                }
+            }
+
+            if (target != null && (snap || !_hasInitializedFocus))
+            {
+                _smoothedFocus = target.position + Vector3.up * targetHeight;
+                _focusVelocity = Vector3.zero;
+                _hasInitializedFocus = true;
+                ApplyTransform();
+            }
+
+            ViewModeChanged?.Invoke(firstPerson);
         }
 
         /// <summary>
@@ -79,12 +212,36 @@ namespace Arnafjordur.Characters
 
         private void Start()
         {
-            if (target != null && !_hasInitializedFocus)
+            EnsureCamera();
+            if (_camera != null && !firstPerson && _camera.fieldOfView > 1f)
+            {
+                thirdPersonFov = _camera.fieldOfView;
+            }
+
+            if (Application.isPlaying && SessionFirstPersonPreference && !firstPerson)
+            {
+                SetFirstPerson(true, snap: true);
+            }
+            else if (firstPerson)
+            {
+                SetFirstPerson(true, snap: true);
+            }
+            else if (target != null && !_hasInitializedFocus)
             {
                 _smoothedFocus = target.position + Vector3.up * targetHeight;
                 _hasInitializedFocus = true;
                 ApplyTransform();
             }
+        }
+
+        private void OnDisable()
+        {
+            RestoreHiddenTarget();
+        }
+
+        private void OnDestroy()
+        {
+            RestoreHiddenTarget();
         }
 
         private void LateUpdate()
@@ -100,6 +257,7 @@ namespace Arnafjordur.Characters
             if (!_hasInitializedFocus)
             {
                 _smoothedFocus = desiredFocus;
+                _focusVelocity = Vector3.zero;
                 _hasInitializedFocus = true;
             }
             else
@@ -112,6 +270,16 @@ namespace Arnafjordur.Characters
 
         private void HandleOrbitAndZoom(float dt)
         {
+            Keyboard kb = Keyboard.current;
+            if (kb != null && (kb.vKey.wasPressedThisFrame || kb.cKey.wasPressedThisFrame))
+            {
+                ToggleFirstPerson();
+                return;
+            }
+
+            float pMin = firstPerson ? firstPersonMinPitch : minPitch;
+            float pMax = firstPerson ? firstPersonMaxPitch : maxPitch;
+
             Mouse mouse = Mouse.current;
             if (mouse != null)
             {
@@ -119,7 +287,7 @@ namespace Arnafjordur.Characters
                 {
                     Vector2 delta = mouse.delta.ReadValue();
                     yaw += delta.x * orbitSensitivity;
-                    pitch = Mathf.Clamp(pitch - delta.y * orbitSensitivity, minPitch, maxPitch);
+                    pitch = Mathf.Clamp(pitch - delta.y * orbitSensitivity, pMin, pMax);
                 }
 
                 float scrollY = mouse.scroll.ReadValue().y;
@@ -127,11 +295,25 @@ namespace Arnafjordur.Characters
                 {
                     // Normalize both standard mouse wheel notches (~120) and smooth trackpad deltas.
                     float normalized = Mathf.Abs(scrollY) > 20f ? Mathf.Sign(scrollY) : scrollY;
-                    distance = Mathf.Clamp(distance - normalized * zoomStep, minDistance, maxDistance);
+                    if (firstPerson)
+                    {
+                        if (normalized < 0f)
+                        {
+                            distance = minDistance;
+                            SetFirstPerson(false, snap: true);
+                        }
+                    }
+                    else if (distance <= minDistance + 0.01f && normalized > 0f)
+                    {
+                        SetFirstPerson(true, snap: true);
+                    }
+                    else
+                    {
+                        distance = Mathf.Clamp(distance - normalized * zoomStep, minDistance, maxDistance);
+                    }
                 }
             }
 
-            Keyboard kb = Keyboard.current;
             if (kb != null)
             {
                 if (kb.qKey.isPressed) yaw -= keyOrbitSpeedDeg * dt;
@@ -141,6 +323,45 @@ namespace Arnafjordur.Characters
 
         private void ApplyTransform()
         {
+            EnsureCamera();
+
+            if (firstPerson)
+            {
+                if (target == null)
+                {
+                    return;
+                }
+
+                if (_hiddenTarget != target)
+                {
+                    if (_hiddenTarget != null)
+                    {
+                        SetTargetHidden(_hiddenTarget, false);
+                    }
+
+                    target.TryGetComponent(out _targetMotor);
+                    SetTargetHidden(target, true);
+                    _hiddenTarget = target;
+                }
+
+                if (_targetMotor != null)
+                {
+                    _targetMotor.LookYawOverride = yaw;
+                }
+
+                Quaternion fpRot = Quaternion.Euler(pitch, yaw, 0f);
+                Vector3 forwardFlat = Quaternion.Euler(0f, yaw, 0f) * Vector3.forward;
+                Vector3 eyePos = target.position + Vector3.up * firstPersonEyeHeight + forwardFlat * firstPersonForwardOffset;
+                transform.SetPositionAndRotation(eyePos, fpRot);
+                if (_camera != null)
+                {
+                    _camera.fieldOfView = firstPersonFov;
+                    _camera.nearClipPlane = 0.05f;
+                }
+
+                return;
+            }
+
             Quaternion rot = Quaternion.Euler(pitch, yaw, 0f);
             Vector3 back = rot * Vector3.back;
             float reach = distance;
@@ -180,6 +401,43 @@ namespace Arnafjordur.Characters
             }
 
             transform.SetPositionAndRotation(desiredPosition, rot);
+        }
+
+        private void EnsureCamera()
+        {
+            if (_camera == null)
+            {
+                TryGetComponent(out _camera);
+            }
+        }
+
+        private void RestoreHiddenTarget()
+        {
+            if (_hiddenTarget != null)
+            {
+                SetTargetHidden(_hiddenTarget, false);
+                _hiddenTarget = null;
+            }
+
+            if (_targetMotor != null)
+            {
+                _targetMotor.LookYawOverride = null;
+                _targetMotor = null;
+            }
+        }
+
+        private static void SetTargetHidden(Transform targetRoot, bool hidden)
+        {
+            if (targetRoot == null)
+            {
+                return;
+            }
+
+            ShadowCastingMode mode = hidden ? ShadowCastingMode.ShadowsOnly : ShadowCastingMode.On;
+            foreach (Renderer r in targetRoot.GetComponentsInChildren<Renderer>(true))
+            {
+                r.shadowCastingMode = mode;
+            }
         }
     }
 }

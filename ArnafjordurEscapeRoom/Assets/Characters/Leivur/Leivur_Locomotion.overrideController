@@ -9,9 +9,9 @@ AnimatorOverrideController:
   m_Name: Leivur_Locomotion
   m_Controller: {fileID: 9100000, guid: 5ec0af03f693952459d924de71c706d1, type: 2}
   m_Clips:
-  - m_OriginalClip: {fileID: -5995973496095416798, guid: 6943848d983024d41b59029989f951cc, type: 3}
-    m_OverrideClip: {fileID: 5997392129929403597, guid: 0e2889143d3f5ac4b9d52f4a8f737b1e, type: 3}
   - m_OriginalClip: {fileID: 3585326272438083404, guid: 6943848d983024d41b59029989f951cc, type: 3}
     m_OverrideClip: {fileID: 917142773297054284, guid: 0e2889143d3f5ac4b9d52f4a8f737b1e, type: 3}
+  - m_OriginalClip: {fileID: -5995973496095416798, guid: 6943848d983024d41b59029989f951cc, type: 3}
+    m_OverrideClip: {fileID: 5997392129929403597, guid: 0e2889143d3f5ac4b9d52f4a8f737b1e, type: 3}
   - m_OriginalClip: {fileID: 6148219988279678672, guid: 6943848d983024d41b59029989f951cc, type: 3}
     m_OverrideClip: {fileID: 5488219556424860423, guid: 0e2889143d3f5ac4b9d52f4a8f737b1e, type: 3}

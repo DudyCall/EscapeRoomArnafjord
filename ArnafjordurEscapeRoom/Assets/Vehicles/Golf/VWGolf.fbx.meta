@@ -7,6 +7,11 @@ ModelImporter:
   - first:
       type: UnityEngine:Material
       assembly: UnityEngine.CoreModule
+      name: AccentBlue
+    second: {fileID: 2100000, guid: 97b34ca71af7c3b4198c09f0eaae35a1, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
       name: Alloy
     second: {fileID: 2100000, guid: 34745aa1198450e4697e9f342f26ac6f, type: 2}
   - first:
@@ -52,8 +57,23 @@ ModelImporter:
   - first:
       type: UnityEngine:Material
       assembly: UnityEngine.CoreModule
+      name: ScreenGlow
+    second: {fileID: 2100000, guid: 0db4bdb4024696546a6afefee9ca70e4, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
       name: Seat
     second: {fileID: 2100000, guid: 29f6c80fc9e7670409dc0be070dfe093, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: SeatBolster
+    second: {fileID: 2100000, guid: 3e6ac32c5f13e9b488bd2f7bb541429a, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: SilverTrim
+    second: {fileID: 2100000, guid: f8a19fd8e60c01043848d4febbdce70a, type: 2}
   - first:
       type: UnityEngine:Material
       assembly: UnityEngine.CoreModule

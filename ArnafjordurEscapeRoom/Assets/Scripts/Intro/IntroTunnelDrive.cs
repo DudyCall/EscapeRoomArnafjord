@@ -102,6 +102,11 @@ namespace Arnafjordur.Intro
                 finished.Invoke();
                 if (!string.IsNullOrEmpty(nextSceneName)) SceneManager.LoadScene(nextSceneName);
             }
+
+            if (Application.isPlaying)
+            {
+                IntroFirstPersonCamera.UpdateAndApply(sequenceCamera, car);
+            }
         }
 
         private void Cache()

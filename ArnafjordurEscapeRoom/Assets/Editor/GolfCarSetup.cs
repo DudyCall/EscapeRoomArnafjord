@@ -39,18 +39,22 @@ namespace Arnafjordur.Editor
 
         private static readonly Def[] Defs =
         {
-            new Def("CarPaint", "#1C4D94", 0.65f, 0.86f),
-            new Def("Glass", "#20282C", 0f, 0.96f, null, 0.42f),
-            new Def("TrimBlack", "#111113", 0f, 0.75f),
+            new Def("CarPaint", "#0D2149", 0.78f, 0.88f),
+            new Def("Glass", "#1B2B28", 0f, 0.96f, null, 0.36f),
+            new Def("TrimBlack", "#111114", 0f, 0.78f),
             new Def("Underbody", "#1A1A1C", 0f, 0.15f),
-            new Def("Interior", "#232427", 0f, 0.2f),
-            new Def("Seat", "#34353A", 0f, 0.1f),
-            new Def("HeadlightLens", "#9AA3AD", 1f, 0.9f),
+            new Def("Interior", "#202228", 0f, 0.30f),
+            new Def("Seat", "#282B34", 0f, 0.22f),
+            new Def("SeatBolster", "#181A20", 0.05f, 0.48f),
+            new Def("SilverTrim", "#B8BEC7", 0.88f, 0.78f),
+            new Def("AccentBlue", "#185CE6", 0.35f, 0.82f, "#071E52"),
+            new Def("ScreenGlow", "#163868", 0.1f, 0.88f, "#1D4B8F"),
+            new Def("HeadlightLens", "#C2CCD6", 0.9f, 0.92f),
             new Def("TaillightLens", "#B00D0D", 0f, 0.88f, "#400000"),
-            new Def("Chrome", "#E6E8EA", 1f, 0.92f),
-            new Def("Tyre", "#141415", 0f, 0.1f),
-            new Def("Alloy", "#CFD1D4", 1f, 0.72f),
-            new Def("BrakeDisc", "#8E8E90", 1f, 0.55f),
+            new Def("Chrome", "#E6E8EA", 1f, 0.94f),
+            new Def("Tyre", "#141415", 0f, 0.12f),
+            new Def("Alloy", "#181A1E", 0.85f, 0.82f),
+            new Def("BrakeDisc", "#96989C", 1f, 0.60f),
             new Def("PlateWhite", "#EFEFEA", 0f, 0.45f),
             new Def("PlateBlue", "#123C9C", 0f, 0.45f),
         };
@@ -133,6 +137,11 @@ namespace Arnafjordur.Editor
                 mat.EnableKeyword("_EMISSION");
                 mat.SetColor("_EmissionColor", def.Emission);
                 mat.globalIlluminationFlags = MaterialGlobalIlluminationFlags.BakedEmissive;
+            }
+            else
+            {
+                mat.DisableKeyword("_EMISSION");
+                mat.SetColor("_EmissionColor", Color.black);
             }
 
             if (def.Transparent)

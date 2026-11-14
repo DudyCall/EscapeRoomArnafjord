@@ -74,6 +74,7 @@ namespace Arnafjordur.Intro
         private float _camStartFov;
         private float _allArrivedAt = -1f;
         private bool _lightsOff, _finishedRaised;
+        private Transform[] _occupantRoots = Array.Empty<Transform>();
 
         /// <summary>Seconds since the scene started.</summary>
         public float Elapsed { get; private set; }
@@ -118,6 +119,7 @@ namespace Arnafjordur.Intro
             _routeIndex = new int[n];
             _doorRest = new Quaternion[n];
             _outAt = new float[n];
+            _occupantRoots = new Transform[n];
             for (int i = 0; i < n; i++)
             {
                 _outAt[i] = -1f;
@@ -125,6 +127,7 @@ namespace Arnafjordur.Intro
                 // the Animator sits on the same object, so recover the player from it rather than leave them seated.
                 if (occupants[i].root == null && occupants[i].animator != null)
                     occupants[i].root = occupants[i].animator.transform;
+                _occupantRoots[i] = occupants[i].root;
                 if (occupants[i].root == null)
                     Debug.LogWarning($"[IntroCarExit] player {i} is not linked - run Tools/Intro/Rebuild Car Exit Scene", this);
                 if (occupants[i].door != null) _doorRest[i] = occupants[i].door.localRotation;
@@ -176,6 +179,11 @@ namespace Arnafjordur.Intro
             Vector3 lookAt = Vector3.Lerp(_camStartLookAt, cameraEndLookAt, s);
             sequenceCamera.transform.SetPositionAndRotation(position, Quaternion.LookRotation(lookAt - position, Vector3.up));
             sequenceCamera.fieldOfView = Mathf.Lerp(_camStartFov, cameraEndFieldOfView, s);
+
+            if (Application.isPlaying)
+            {
+                IntroFirstPersonCamera.UpdateAndApply(sequenceCamera, _occupantRoots);
+            }
         }
 
         private void Step(int i, float dt)

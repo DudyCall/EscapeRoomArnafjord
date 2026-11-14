@@ -1,5 +1,5 @@
 """
-Procedural Volkswagen Golf Mk7 (2015), 5-door, blue metallic.
+Procedural Volkswagen Golf Mk7 GTE (2015), 5-door, dark blue metallic.
 
 Run:  blender --background --python build_golf.py -- [out.fbx] [--no-render]
 
@@ -23,7 +23,7 @@ S_FRONT_AXLE, WHEELBASE = 0.880, 2.637
 S_REAR_AXLE = S_FRONT_AXLE + WHEELBASE
 S_MID = S_FRONT_AXLE + WHEELBASE / 2
 TRACK_F, TRACK_R = 1.549, 1.520
-TYRE_R, TYRE_W, RIM_R = 0.316, 0.205, 0.203      # 205/55 R16
+TYRE_R, TYRE_W, RIM_R = 0.316, 0.205, 0.228      # 225/40 R18 low-profile
 ARCH_R = 0.355
 
 
@@ -66,18 +66,25 @@ def make_mat(name, color, metallic=0.0, rough=0.5, alpha=1.0, emission=None, est
 
 
 MATS = {
-    "CarPaint":      make_mat("CarPaint", (0.012, 0.075, 0.30), metallic=0.75, rough=0.28, coat=1.0),
-    "Glass":         make_mat("Glass", (0.02, 0.03, 0.035), rough=0.03, alpha=0.38),
-    "TrimBlack":     make_mat("TrimBlack", (0.012, 0.012, 0.014), rough=0.25),
+    "CarPaint":      make_mat("CarPaint", (0.005, 0.018, 0.075), metallic=0.82, rough=0.20, coat=1.0),
+    "Glass":         make_mat("Glass", (0.025, 0.055, 0.050), rough=0.03, alpha=0.34),
+    "TrimBlack":     make_mat("TrimBlack", (0.010, 0.011, 0.014), rough=0.22),
     "Underbody":     make_mat("Underbody", (0.02, 0.02, 0.022), rough=0.85),
-    "Interior":      make_mat("Interior", (0.035, 0.036, 0.04), rough=0.8),
-    "Seat":          make_mat("Seat", (0.06, 0.062, 0.07), rough=0.9),
-    "HeadlightLens": make_mat("HeadlightLens", (0.20, 0.22, 0.25), metallic=1.0, rough=0.16),
+    "Interior":      make_mat("Interior", (0.028, 0.030, 0.036), rough=0.65),
+    "Seat":          make_mat("Seat", (0.042, 0.045, 0.055), rough=0.78),
+    "SeatBolster":   make_mat("SeatBolster", (0.018, 0.020, 0.025), metallic=0.05, rough=0.40),
+    "SilverTrim":    make_mat("SilverTrim", (0.58, 0.61, 0.65), metallic=0.88, rough=0.22),
+    "AccentBlue":    make_mat("AccentBlue", (0.015, 0.14, 0.68), metallic=0.35, rough=0.25,
+                              emission=(0.02, 0.18, 0.85), estr=0.15),
+    "ScreenGlow":    make_mat("ScreenGlow", (0.02, 0.06, 0.14), rough=0.12,
+                              emission=(0.06, 0.22, 0.48), estr=0.65),
+    "HeadlightLens": make_mat("HeadlightLens", (0.72, 0.78, 0.88), metallic=0.9, rough=0.10,
+                              emission=(0.75, 0.82, 0.95), estr=0.18),
     "TaillightLens": make_mat("TaillightLens", (0.45, 0.01, 0.01), rough=0.12,
                               emission=(1.0, 0.03, 0.02), estr=0.3),
     "Chrome":        make_mat("Chrome", (0.82, 0.83, 0.85), metallic=1.0, rough=0.08),
     "Tyre":          make_mat("Tyre", (0.015, 0.015, 0.016), rough=0.9),
-    "Alloy":         make_mat("Alloy", (0.62, 0.63, 0.65), metallic=1.0, rough=0.28),
+    "Alloy":         make_mat("Alloy", (0.020, 0.022, 0.026), metallic=0.85, rough=0.20, coat=0.6),
     "BrakeDisc":     make_mat("BrakeDisc", (0.30, 0.30, 0.31), metallic=1.0, rough=0.45),
     "PlateWhite":    make_mat("PlateWhite", (0.88, 0.88, 0.86), rough=0.45),
     "PlateBlue":     make_mat("PlateBlue", (0.01, 0.08, 0.45), rough=0.45),
@@ -192,6 +199,33 @@ def T(x, s, z):
 
 def RX(deg):
     return Matrix.Rotation(math.radians(deg), 4, 'X')
+
+
+def RY(deg):
+    return Matrix.Rotation(math.radians(deg), 4, 'Y')
+
+
+def RZ(deg):
+    return Matrix.Rotation(math.radians(deg), 4, 'Z')
+
+
+def add_text(mb, text, size, mat, xf, offset=(0.0, 0.0, 0.002), orient=None):
+    cu = bpy.data.curves.new("text3d", 'FONT')
+    cu.body = text
+    cu.size = size
+    cu.align_x = 'CENTER'
+    cu.align_y = 'CENTER'
+    ob = bpy.data.objects.new("text3d", cu)
+    scene.collection.objects.link(ob)
+    d2 = bpy.context.evaluated_depsgraph_get()
+    d2.update()
+    tm = bpy.data.meshes.new_from_object(ob.evaluated_get(d2), depsgraph=d2)
+    off = Vector(offset)
+    tv = [Vector(v.co) + off for v in tm.vertices]
+    tf = [list(p.vertices) for p in tm.polygons]
+    mb.add(tv, tf, mat, orient=orient, xf=xf)
+    bpy.data.objects.remove(ob)
+    bpy.data.meshes.remove(tm)
 
 
 # =============================================================== BODY SHELL
@@ -337,19 +371,23 @@ def build_body_cage():
 
     for i in (0, NX):
         for j in range(NY):
-            crease((i, j, 4), (i, j + 1, 4), 0.75)                 # shoulder / character line
-            crease((i, j, 1), (i, j + 1, 1), 0.4)                  # sill
-            crease((i, j, NZ), (i, j + 1, NZ), 0.3 if j < 5 else 0.5)   # fender crest / roof rail
+            crease((i, j, 4), (i, j + 1, 4), 0.85)                 # shoulder / character line
+            crease((i, j, 1), (i, j + 1, 1), 0.55)                  # sill
+            crease((i, j, NZ), (i, j + 1, NZ), 0.35 if j < 5 else 0.55)  # fender crest / roof rail
             if 5 <= j <= 15:
-                crease((i, j, 5), (i, j + 1, 5), 0.3)
+                crease((i, j, 5), (i, j + 1, 5), 0.35)
         for k in range(NZ):
-            crease((i, NY, k), (i, NY, k + 1), 0.3)                # tail corners
+            crease((i, NY, k), (i, NY, k + 1), 0.35)               # tail corners
+    for j in range(5):
+        crease((1, j, NZ), (1, j + 1, NZ), 0.45)                    # hood character creases
+        crease((NX - 1, j, NZ), (NX - 1, j + 1, NZ), 0.45)
     for i in range(NX):
-        for j, val in ((0, 0.4), (5, 0.5), (15, 0.9), (16, 0.7), (17, 0.4), (NY, 0.5)):
+        for j, val in ((0, 0.45), (5, 0.5), (15, 0.9), (16, 0.7), (17, 0.4), (NY, 0.5)):
             crease((i, j, NZ), (i + 1, j, NZ), val)
-        crease((i, 0, 4), (i + 1, 0, 4), 0.3)
+        crease((i, 0, 4), (i + 1, 0, 4), 0.45)
+        crease((i, 0, 1), (i + 1, 0, 1), 0.35)
     for key, faces in regions.items():
-        th = 0.030 if key in ("windscreen", "rearwindow") else 0.022
+        th = 0.022 if key in ("windscreen", "rearwindow") else 0.015
         res = bmesh.ops.inset_region(bm, faces=faces, thickness=th, depth=0.0,
                                      use_even_offset=True, use_boundary=True)
         for f in res["faces"]:
@@ -596,43 +634,117 @@ def surface_frame(kind, u, v, lift=0.0):
 
 # ------------------------------------------------------------ front details
 for mir in (False, True):
+    # dark internal headlight housing
     patch(body, "front", [(0.36, 0.708), (0.55, 0.708), (0.70, 0.698), (0.765, 0.684)],
-          [(0.405, 0.632), (0.55, 0.610), (0.68, 0.612), (0.765, 0.640)], 16, 5, "HeadlightLens", mirror=mir)
-    # inner projector rings
-    for cx in (0.52, 0.65):
-        m = surface_frame("front", -cx if mir else cx, 0.660, lift=0.006)
-        vs, fs = lathe([(0.036, 0.0), (0.029, 0.004), (0.0, 0.004)], 16, False)
+          [(0.405, 0.632), (0.55, 0.610), (0.68, 0.612), (0.765, 0.640)], 16, 5, "TrimBlack",
+          offset=0.002, rim=0.008, mirror=mir)
+    # upper chrome brow & signature GTE blue lower headlight stripe
+    patch(body, "front", [(0.365, 0.706), (0.55, 0.706), (0.70, 0.696), (0.755, 0.683)],
+          [(0.370, 0.699), (0.55, 0.699), (0.70, 0.690), (0.755, 0.677)], 12, 1, "Chrome",
+          offset=0.005, rim=0.003, mirror=mir)
+    patch(body, "front", [(0.395, 0.644), (0.55, 0.625), (0.68, 0.626), (0.755, 0.649)],
+          [(0.405, 0.634), (0.55, 0.615), (0.68, 0.616), (0.755, 0.641)], 12, 1, "AccentBlue",
+          offset=0.006, rim=0.003, mirror=mir)
+    # inner projector barrels + glowing lenses + U-DRL accents
+    for cx in (0.50, 0.64):
+        m = surface_frame("front", -cx if mir else cx, 0.660, lift=0.005)
+        vs, fs = lathe([(0.036, 0.0), (0.028, 0.005), (0.024, 0.005), (0.024, 0.001)], 16, False)
         rot = Matrix(((0, 0, 1, 0), (0, 1, 0, 0), (1, 0, 0, 0), (0, 0, 0, 1)))  # lathe X axis -> local Z
         nz = m.to_3x3() @ Vector((0, 0, 1))
         body.add(vs, fs, "Chrome", orient=lambda c, nz=nz: nz, xf=m @ rot)
+        lvs, lfs = disc(0.024, 0.0025, 16)
+        body.add(lvs, lfs, "HeadlightLens", orient=lambda c, nz=nz: nz, xf=m @ rot)
+        # U-shaped LED DRL arc below each projector
+        patch(body, "front", [(cx - 0.042, 0.634), (cx + 0.042, 0.634)],
+              [(cx - 0.042, 0.626), (cx + 0.042, 0.626)], 6, 1, "HeadlightLens",
+              offset=0.006, rim=0.002, mirror=mir)
 for kind in ("fl", "fr"):
     try:
-        patch(body, kind, [(-0.10, 0.694), (0.12, 0.682)], [(-0.10, 0.628), (0.12, 0.646)], 6, 4, "HeadlightLens")
+        patch(body, kind, [(-0.10, 0.694), (0.12, 0.682)], [(-0.10, 0.628), (0.12, 0.646)],
+              6, 4, "TrimBlack", offset=0.002, rim=0.008)
+        patch(body, kind, [(-0.10, 0.640), (0.10, 0.653)], [(-0.10, 0.632), (0.10, 0.646)],
+              6, 1, "AccentBlue", offset=0.005, rim=0.003)
     except RuntimeError as e:
         print("corner lamp skipped:", e)
-for kind in ("rl", "rr"):
-    try:
-        patch(body, kind, [(-0.11, 0.946), (0.11, 0.947)], [(-0.11, 0.846), (0.11, 0.857)], 6, 4, "TaillightLens")
-    except RuntimeError as e:
-        print("corner lamp skipped:", e)
-# upper grille strip + chrome line
-patch(body, "front", [(-0.36, 0.708), (0.36, 0.708)], [(-0.405, 0.634), (0.405, 0.634)], 20, 3, "TrimBlack")
-patch(body, "front", [(-0.40, 0.646), (0.40, 0.646)], [(-0.40, 0.638), (0.40, 0.638)], 20, 1, "Chrome",
-      offset=0.007, rim=0.003)
-# lower intake
-patch(body, "front", [(-0.62, 0.365), (-0.50, 0.385), (0.50, 0.385), (0.62, 0.365)],
-      [(-0.57, 0.275), (-0.45, 0.262), (0.45, 0.262), (0.57, 0.275)], 24, 4, "TrimBlack")
-for y in (0.300, 0.335):
-    patch(body, "front", [(-0.50, y + 0.004), (0.50, y + 0.004)], [(-0.50, y - 0.004), (0.50, y - 0.004)],
+# upper grille: gloss black slats + upper/mid chrome lines + GTE blue lower bar
+patch(body, "front", [(-0.36, 0.708), (0.36, 0.708)], [(-0.405, 0.634), (0.405, 0.634)],
+      20, 3, "TrimBlack", offset=0.002, rim=0.008)
+patch(body, "front", [(-0.365, 0.708), (0.365, 0.708)], [(-0.368, 0.700), (0.368, 0.700)],
+      20, 1, "Chrome", offset=0.006, rim=0.003)
+patch(body, "front", [(-0.38, 0.654), (0.38, 0.654)], [(-0.38, 0.648), (0.38, 0.648)],
+      20, 1, "Chrome", offset=0.006, rim=0.003)
+patch(body, "front", [(-0.405, 0.646), (0.405, 0.646)], [(-0.405, 0.634), (0.405, 0.634)],
+      20, 1, "AccentBlue", offset=0.007, rim=0.003)
+# lower intake: center slatted grille + ACC sensor + GTE side pockets with C-DRLs + front lip
+patch(body, "front", [(-0.43, 0.365), (0.43, 0.365)], [(-0.41, 0.256), (0.41, 0.256)],
+      20, 3, "TrimBlack", offset=0.003, rim=0.012)
+for y in (0.285, 0.314, 0.342):
+    patch(body, "front", [(-0.41, y + 0.004), (0.41, y + 0.004)], [(-0.41, y - 0.004), (0.41, y - 0.004)],
           16, 1, "Underbody", offset=0.007, rim=0.002)
+m_acc = surface_frame("front", 0.0, 0.308, lift=0.007)
+vs, fs = rbox((0.095, 0.068, 0.014), bevel=0.004, seg=1)
+body.add(vs, fs, "TrimBlack", xf=m_acc)
+for mir in (False, True):
+    patch(body, "front", [(0.45, 0.376), (0.68, 0.362)], [(0.44, 0.258), (0.64, 0.268)],
+          10, 3, "TrimBlack", offset=0.003, rim=0.010, mirror=mir)
+    for y in (0.300, 0.336):
+        patch(body, "front", [(0.46, y + 0.004), (0.65, y + 0.002)], [(0.46, y - 0.004), (0.65, y - 0.006)],
+              8, 1, "Underbody", offset=0.007, rim=0.003, mirror=mir)
+    # signature GTE C-shaped chrome bezel + LED DRL around outer intakes
+    patch(body, "front", [(0.45, 0.388), (0.71, 0.372)], [(0.45, 0.376), (0.69, 0.361)],
+          8, 1, "Chrome", offset=0.008, rim=0.004, mirror=mir)
+    patch(body, "front", [(0.685, 0.372), (0.715, 0.370)], [(0.655, 0.256), (0.685, 0.258)],
+          3, 4, "Chrome", offset=0.008, rim=0.004, mirror=mir)
+    patch(body, "front", [(0.44, 0.260), (0.68, 0.270)], [(0.44, 0.248), (0.66, 0.258)],
+          8, 1, "Chrome", offset=0.008, rim=0.004, mirror=mir)
+    patch(body, "front", [(0.46, 0.384), (0.695, 0.368)], [(0.46, 0.379), (0.69, 0.363)],
+          8, 1, "HeadlightLens", offset=0.009, rim=0.002, mirror=mir)
+    patch(body, "front", [(0.690, 0.366), (0.703, 0.365)], [(0.662, 0.262), (0.675, 0.263)],
+          2, 4, "HeadlightLens", offset=0.009, rim=0.002, mirror=mir)
+# lower splitter accent line
+patch(body, "front", [(-0.66, 0.242), (-0.42, 0.236), (0.42, 0.236), (0.66, 0.242)],
+      [(-0.64, 0.230), (-0.40, 0.224), (0.40, 0.224), (0.64, 0.230)], 24, 1, "SilverTrim",
+      offset=0.007, rim=0.004)
 
 # ------------------------------------------------------------- rear details
 for mir in (False, True):
-    patch(body, "rear", [(0.34, 0.968), (0.55, 0.965), (0.68, 0.953), (0.745, 0.938)],
-          [(0.37, 0.858), (0.55, 0.842), (0.67, 0.832), (0.745, 0.846)], 14, 5, "TaillightLens", mirror=mir)
-for side in ("left", "right"):
-    patch(body, side, [(3.90, 0.948), (4.05, 0.944)], [(3.945, 0.862), (4.05, 0.850)], 5, 4, "TaillightLens")
-patch(body, "rear", [(-0.62, 0.395), (0.62, 0.395)], [(-0.58, 0.305), (0.58, 0.305)], 20, 3, "TrimBlack")
+    # inner tailgate section (stops cleanly at the hatch shutline x=0.66)
+    patch(body, "rear", [(0.34, 0.968), (0.50, 0.966), (0.655, 0.956)],
+          [(0.37, 0.858), (0.52, 0.844), (0.655, 0.834)], 10, 5, "TrimBlack",
+          offset=0.002, rim=0.008, mirror=mir)
+    patch(body, "rear", [(0.35, 0.962), (0.50, 0.960), (0.650, 0.950)],
+          [(0.36, 0.916), (0.51, 0.913), (0.650, 0.904)], 10, 2, "TaillightLens",
+          offset=0.005, rim=0.004, mirror=mir)
+    patch(body, "rear", [(0.37, 0.888), (0.52, 0.876), (0.650, 0.866)],
+          [(0.375, 0.862), (0.52, 0.849), (0.650, 0.840)], 10, 2, "TaillightLens",
+          offset=0.005, rim=0.004, mirror=mir)
+    patch(body, "rear", [(0.365, 0.908), (0.650, 0.895)], [(0.368, 0.896), (0.650, 0.882)],
+          8, 1, "Chrome", offset=0.006, rim=0.003, mirror=mir)
+for kind in ("rl", "rr"):
+    # outer quarter-panel wraparound lamp from hatch shutline smoothly onto rear fender
+    patch(body, kind, [(-0.075, 0.954), (0.02, 0.946), (0.125, 0.936)],
+          [(-0.075, 0.835), (0.02, 0.848), (0.125, 0.866)], 10, 5, "TrimBlack",
+          offset=0.002, rim=0.007)
+    patch(body, kind, [(-0.072, 0.948), (0.02, 0.940), (0.118, 0.932)],
+          [(-0.072, 0.904), (0.02, 0.904), (0.118, 0.905)], 10, 2, "TaillightLens",
+          offset=0.005, rim=0.004)
+    patch(body, kind, [(-0.072, 0.867), (0.02, 0.875), (0.118, 0.885)],
+          [(-0.072, 0.841), (0.02, 0.854), (0.118, 0.870)], 10, 2, "TaillightLens",
+          offset=0.005, rim=0.004)
+    patch(body, kind, [(-0.072, 0.895), (0.118, 0.899)], [(-0.072, 0.881), (0.118, 0.889)],
+          8, 1, "Chrome", offset=0.006, rim=0.003)
+# rear diffuser + vertical strakes + twin left chrome exhaust tips
+patch(body, "rear", [(-0.62, 0.395), (0.62, 0.395)], [(-0.58, 0.305), (0.58, 0.305)],
+      20, 3, "TrimBlack", offset=0.003, rim=0.010)
+for vx in (-0.32, -0.11, 0.11, 0.32):
+    patch(body, "rear", [(vx - 0.006, 0.380), (vx + 0.006, 0.380)], [(vx - 0.006, 0.310), (vx + 0.006, 0.310)],
+          2, 2, "Underbody", offset=0.008, rim=0.004)
+for ex in (0.43, 0.52):
+    vs, fs = lathe([(0.032, 0.0), (0.032, 0.065), (0.026, 0.065), (0.026, 0.01)], 18, False)
+    rot = Matrix(((0, 0, 1, 0), (0, 1, 0, 0), (1, 0, 0, 0), (0, 0, 0, 1))) @ RX(90)
+    # orient cylinder along +Y (rear) at lower left diffuser
+    ex_m = T(ex, 4.185, 0.285) @ Matrix.Rotation(math.radians(-90), 4, 'Z')
+    body.add(vs, fs, "Chrome", xf=ex_m)
 
 
 # ------------------------------------------------------------------- badges
@@ -644,7 +756,7 @@ def badge(kind, z, R):
     nz = m.to_3x3() @ Vector((0, 0, 1))
     o = lambda c: nz
     body.add(ring + inner, [[a, (a + 1) % seg, seg + (a + 1) % seg, seg + a] for a in range(seg)], "Chrome", o, m)
-    body.add(inner, [list(range(seg))], "PlateBlue", o, m)
+    body.add(inner, [list(range(seg))], "TrimBlack", o, m)
     back = [p + Vector((0, 0, -0.012)) for p in ring]
     body.add(ring + back, [[a, (a + 1) % seg, seg + (a + 1) % seg, seg + a] for a in range(seg)], "Chrome",
              lambda c: c - (m @ Vector((0, 0, 0))), m)
@@ -660,8 +772,25 @@ def badge(kind, z, R):
                      [[0, 1, 2, 3]], "Chrome", o, m)
 
 
-badge("front", 0.676, 0.060)
+badge("front", 0.674, 0.062)
 badge("rear", 0.905, 0.058)
+
+# GTE grille & tailgate badges + front fender wing badges
+for kind, u, v, sz in (("front", -0.21, 0.676, 0.028), ("rear", 0.46, 0.76, 0.032)):
+    gm_f = surface_frame(kind, u, v, lift=0.008)
+    nz_f = gm_f.to_3x3() @ Vector((0, 0, 1))
+    vs, fs = rbox((sz * 3.4, sz * 0.95, 0.006), bevel=0.002, seg=1)
+    body.add(vs, fs, "TrimBlack", xf=gm_f)
+    vs, fs = rbox((sz * 3.2, sz * 0.18, 0.007), bevel=0.0, seg=1)
+    body.add(vs, fs, "AccentBlue", xf=gm_f @ Matrix.Translation((0.0, -sz * 0.36, 0.001)))
+    add_text(body, "GTE", sz, "Chrome", gm_f, offset=(0.0, sz * 0.06, 0.0045), orient=lambda c, nz=nz_f: nz)
+
+for side in ("left", "right"):
+    fm = surface_frame(side, 1.24, 0.785, lift=0.005)
+    vs, fs = rbox((0.075, 0.018, 0.006), bevel=0.002, seg=1)
+    body.add(vs, fs, "SilverTrim", xf=fm)
+    vs, fs = rbox((0.022, 0.018, 0.007), bevel=0.001, seg=1)
+    body.add(vs, fs, "AccentBlue", xf=fm @ Matrix.Translation((-0.024 if side == "left" else 0.024, 0.0, 0.0005)))
 
 
 # ------------------------------------------------------------ number plates
@@ -672,33 +801,20 @@ def plate(kind, z, text="AF 215"):
     body.add(vs, fs, "PlateWhite", xf=m)
     vs, fs = rbox((0.045, 0.104, 0.0125), bevel=0.0, seg=1)
     body.add(vs, fs, "PlateBlue", xf=m @ Matrix.Translation((-0.235, 0, 0.0005)))
-    cu = bpy.data.curves.new("platetext", 'FONT')
-    cu.body = text
-    cu.size = 0.092
-    cu.align_x = 'CENTER'
-    cu.align_y = 'CENTER'
-    ob = bpy.data.objects.new("platetext", cu)
-    scene.collection.objects.link(ob)
-    d2 = bpy.context.evaluated_depsgraph_get()
-    d2.update()
-    tm = bpy.data.meshes.new_from_object(ob.evaluated_get(d2), depsgraph=d2)
-    tv = [Vector((v.co.x + 0.02, v.co.y, 0.0075)) for v in tm.vertices]
-    tf = [list(p.vertices) for p in tm.polygons]
-    body.add(tv, tf, "PlateBlue", orient=lambda c: nz, xf=m)
-    bpy.data.objects.remove(ob)
-    bpy.data.meshes.remove(tm)
+    add_text(body, text, 0.092, "PlateBlue", m, offset=(0.02, 0.0, 0.0075), orient=lambda c, nz=nz: nz)
 
 
 plate("front", 0.505)
 plate("rear", 0.655)
 
-# --------------------------------------------------------------- shut lines
+# --------------------------------------------------------------- shut lines & skirts
 ARC_R = [(3.14, 0.25), (3.13, 0.42), (3.19, 0.56), (3.28, 0.66), (3.36, 0.73), (3.40, 0.82), (3.41, 0.965)]
 for side in ("left", "right"):
     ribbon(body, side, [(1.40, 0.25), (1.385, 0.50), (1.385, 0.80), (1.40, 0.895)])
     ribbon(body, side, [(2.62, 0.25), (2.62, 0.935)])
     ribbon(body, side, [(1.40, 0.25), (3.14, 0.25)])
     ribbon(body, side, ARC_R)
+    ribbon(body, side, [(1.28, 0.215), (3.22, 0.215)], mat="TrimBlack", width=0.026, offset=0.005)
 flap = [(3.80 + 0.075 * math.copysign(abs(math.cos(a)) ** 0.5, math.cos(a)),
          0.80 + 0.075 * math.copysign(abs(math.sin(a)) ** 0.5, math.sin(a)))
         for a in [2 * math.pi * i / 24 for i in range(24)]]
@@ -711,6 +827,8 @@ for mir in (False, True):
 for side, sg in (("left", 1), ("right", -1)):
     for s, z in ((2.43, 0.835), (3.21, 0.846)):
         loc, n = cast(side, s, z)
+        vs, fs = rbox((0.012, 0.18, 0.028), bevel=0.006, seg=2)
+        door_at(s, sg).add(vs, fs, "TrimBlack", xf=Matrix.Translation(loc - n * 0.001))
         vs, fs = rbox((0.036, 0.19, 0.034), bevel=0.012, seg=3)
         door_at(s, sg).add(vs, fs, "CarPaint", xf=Matrix.Translation(loc + n * 0.006))
 
@@ -729,6 +847,9 @@ for side, sg in (("left", 1), ("right", -1)):
     bm.free()
     door = door_at(1.50, sg)                 # the mirror rides on the front door
     door.add(vs, fs, "CarPaint", xf=Matrix.Translation(c))
+    # mirror LED turn signal strip along forward edge
+    vs, fs = rbox((0.115, 0.012, 0.009), bevel=0.003, seg=1)
+    door.add(vs, fs, "HeadlightLens", xf=Matrix.Translation(c + Vector((0.018 * sg, -0.056, -0.005))))
     seg = 20
     dv = [Vector((0.082 * math.cos(2 * math.pi * a / seg), 0.062 * 0.55 + 0.001, 0.052 * math.sin(2 * math.pi * a / seg)))
           for a in range(seg)]
@@ -768,115 +889,363 @@ for x0, x1 in ((0.52, -0.02), (-0.08, -0.60)):
 SEAT_ANCHORS = {}
 
 
-def seat(x, s, width, name=None):
-    vs, fs = rbox((width, 0.50, 0.14), bevel=0.04)
+def add_cylinder_y(mb, radius, length, mat, xf, segs=16):
+    vs, fs = lathe([(radius, -length / 2), (radius, length / 2)], segs, False)
+    # lathe revolves about X; rotate 90 deg about Z so axis lies along Y
+    mb.add(vs, fs, mat, xf=xf @ RZ(90))
+    for sx in (-1, 1):
+        dvs, dfs = disc(radius, sx * length / 2, segs)
+        mb.add(dvs, dfs, mat, orient=lambda c, sx=sx, xf=xf: (xf.to_3x3() @ Vector((0, sx, 0))), xf=xf @ RZ(90))
+
+
+def add_cylinder_z(mb, radius, height, mat, xf, segs=16):
+    vs, fs = lathe([(radius, -height / 2), (radius, height / 2)], segs, False)
+    mb.add(vs, fs, mat, xf=xf @ Matrix.Rotation(math.radians(90), 4, 'Y'))
+    for sz in (-1, 1):
+        dvs, dfs = disc(radius, sz * height / 2, segs)
+        mb.add(dvs, dfs, mat, orient=lambda c, sz=sz, xf=xf: (xf.to_3x3() @ Vector((0, 0, sz))),
+               xf=xf @ Matrix.Rotation(math.radians(90), 4, 'Y'))
+
+
+def headrest(x, s, z):
+    vs, fs = rbox((0.23, 0.095, 0.17), bevel=0.032)
+    interior.add(vs, fs, "SeatBolster", xf=T(x, s, z) @ RX(-12))
+    vs, fs = rbox((0.15, 0.03, 0.13), bevel=0.012)
+    interior.add(vs, fs, "Seat", xf=T(x, s - 0.038, z) @ RX(-12))
+    for px in (-0.055, 0.055):
+        vs, fs = rbox((0.014, 0.014, 0.12), bevel=0.003, seg=1)
+        interior.add(vs, fs, "SilverTrim", xf=T(x + px, s - 0.008, z - 0.12) @ RX(-12))
+
+
+def sport_seat(x, s, width, name=None):
+    # base cushion + sculpted side bolsters + GTE blue seam piping
+    vs, fs = rbox((width - 0.15, 0.48, 0.13), bevel=0.035)
     interior.add(vs, fs, "Seat", xf=T(x, s, 0.345) @ RX(6))
-    vs, fs = rbox((width - 0.02, 0.12, 0.62), bevel=0.04)
+    for rib in (-0.12, 0.02, 0.14):
+        vs, fs = rbox((width - 0.19, 0.10, 0.02), bevel=0.008, seg=2)
+        interior.add(vs, fs, "Seat", xf=T(x, s + rib, 0.405) @ RX(6))
+    for side in (-1, 1):
+        vs, fs = rbox((0.105, 0.49, 0.16), bevel=0.038)
+        interior.add(vs, fs, "SeatBolster", xf=T(x + side * 0.195, s, 0.365) @ RX(6))
+        vs, fs = rbox((0.012, 0.45, 0.014), bevel=0.004, seg=1)
+        interior.add(vs, fs, "AccentBlue", xf=T(x + side * 0.145, s, 0.415) @ RX(6))
+
+    # contoured backrest + flared lateral bolsters + upper GTE blue accent
+    vs, fs = rbox((width - 0.16, 0.115, 0.60), bevel=0.035)
     interior.add(vs, fs, "Seat", xf=T(x, s + 0.31, 0.70) @ RX(-18))
+    for side in (-1, 1):
+        vs, fs = rbox((0.10, 0.155, 0.56), bevel=0.035)
+        interior.add(vs, fs, "SeatBolster", xf=T(x + side * 0.185, s + 0.295, 0.70) @ RX(-18))
+        vs, fs = rbox((0.012, 0.018, 0.48), bevel=0.004, seg=1)
+        interior.add(vs, fs, "AccentBlue", xf=T(x + side * 0.140, s + 0.252, 0.70) @ RX(-18))
+    vs, fs = rbox((width - 0.18, 0.122, 0.028), bevel=0.008, seg=2)
+    interior.add(vs, fs, "AccentBlue", xf=T(x, s + 0.368, 0.88) @ RX(-18))
     if name:
         SEAT_ANCHORS[name] = V(x, s + 0.05, 0.43)
 
 
-def headrest(x, s, z):
-    vs, fs = rbox((0.25, 0.10, 0.18), bevel=0.035)
-    interior.add(vs, fs, "Seat", xf=T(x, s, z) @ RX(-12))
-    vs, fs = rbox((0.10, 0.02, 0.12), bevel=0.0, seg=1)
-    interior.add(vs, fs, "TrimBlack", xf=T(x, s - 0.01, z - 0.12) @ RX(-12))
-
-
-seat(0.37, 2.38, 0.50, "Seat_Driver")
-seat(-0.37, 2.38, 0.50, "Seat_FrontPassenger")
+sport_seat(0.37, 2.38, 0.50, "Seat_Driver")
+sport_seat(-0.37, 2.38, 0.50, "Seat_FrontPassenger")
 headrest(0.37, 2.81, 1.09)
 headrest(-0.37, 2.81, 1.09)
-# rear bench
-vs, fs = rbox((1.22, 0.50, 0.14), bevel=0.04)
+
+# rear bench (sculpted outer bolsters, smooth middle seat for Olavur)
+vs, fs = rbox((1.18, 0.50, 0.14), bevel=0.04)
 interior.add(vs, fs, "Seat", xf=T(0, 3.25, 0.355) @ RX(5))
-vs, fs = rbox((1.22, 0.12, 0.60), bevel=0.04)
+vs, fs = rbox((1.18, 0.12, 0.60), bevel=0.04)
 interior.add(vs, fs, "Seat", xf=T(0, 3.58, 0.70) @ RX(-20))
+for side in (-1, 1):
+    vs, fs = rbox((0.11, 0.50, 0.16), bevel=0.038)
+    interior.add(vs, fs, "SeatBolster", xf=T(side * 0.57, 3.25, 0.372) @ RX(5))
+    vs, fs = rbox((0.11, 0.15, 0.57), bevel=0.035)
+    interior.add(vs, fs, "SeatBolster", xf=T(side * 0.57, 3.56, 0.70) @ RX(-20))
+    vs, fs = rbox((0.012, 0.45, 0.014), bevel=0.004, seg=1)
+    interior.add(vs, fs, "AccentBlue", xf=T(side * 0.515, 3.25, 0.425) @ RX(5))
+    vs, fs = rbox((0.22, 0.125, 0.024), bevel=0.006, seg=1)
+    interior.add(vs, fs, "AccentBlue", xf=T(side * 0.40, 3.635, 0.86) @ RX(-20))
 for x, nm in ((0.40, "Seat_RearLeft"), (0.0, "Seat_RearMiddle"), (-0.40, "Seat_RearRight")):
     headrest(x, 3.71, 1.06)
     SEAT_ANCHORS[nm] = V(x, 3.30, 0.43)
-# parcel shelf
+
+# parcel shelf, floor, transmission tunnel & carpeted floor mats
 vs, fs = rbox((1.20, 0.36, 0.02), bevel=0.0, seg=1)
 interior.add(vs, fs, "Interior", xf=T(0, 3.86, 0.93))
-# floor
 vs, fs = rbox((1.46, 2.55, 0.02), bevel=0.0, seg=1)
 interior.add(vs, fs, "Interior", xf=T(0, 2.62, 0.265))
+vs, fs = rbox((0.20, 1.95, 0.13), bevel=0.025)
+interior.add(vs, fs, "Interior", xf=T(0, 2.65, 0.33))
+for mx, ms, mw, ml in ((0.37, 1.78, 0.44, 0.58), (-0.37, 1.78, 0.44, 0.58),
+                       (0.40, 2.86, 0.42, 0.42), (-0.40, 2.86, 0.42, 0.42)):
+    vs, fs = rbox((mw, ml, 0.012), bevel=0.004, seg=1)
+    interior.add(vs, fs, "SeatBolster", xf=T(mx, ms, 0.278))
 
-# dashboard (extruded profile)
-prof = [(1.30, 0.50), (1.30, 0.925), (1.55, 0.972), (1.73, 0.975), (1.80, 0.925), (1.81, 0.70), (1.72, 0.50)]
-hw = 0.70
+# driver footwell pedals (dead pedal, brake, accelerator)
+for px, ps, pz, pw, ph, ang in ((0.55, 1.54, 0.36, 0.075, 0.16, 38),
+                                (0.40, 1.54, 0.40, 0.095, 0.07, 32),
+                                (0.27, 1.50, 0.37, 0.055, 0.14, 36)):
+    vs, fs = rbox((pw, 0.016, ph), bevel=0.004, seg=1)
+    interior.add(vs, fs, "SilverTrim", xf=T(px, ps, pz) @ RX(ang))
+    vs, fs = rbox((pw * 0.72, 0.018, ph * 0.72), bevel=0.002, seg=1)
+    interior.add(vs, fs, "TrimBlack", xf=T(px, ps + 0.003, pz) @ RX(ang))
+
+# sculpted upper/mid dashboard (open footwells below z=0.66)
+prof = [(1.30, 0.69), (1.30, 0.925), (1.55, 0.972), (1.73, 0.975), (1.80, 0.925), (1.81, 0.74), (1.72, 0.67)]
+hw = 0.72
 dv = [V(-hw, s, z) for s, z in prof] + [V(hw, s, z) for s, z in prof]
 n = len(prof)
 df = [[a, (a + 1) % n, n + (a + 1) % n, n + a] for a in range(n)] + [list(range(n)), list(range(n, 2 * n))]
 dc = sum(dv, Vector((0, 0, 0))) / len(dv)
 interior.add(dv, df, "Interior", orient=lambda c: c - dc)
-# instrument binnacle, centre screen, console, gear knob
-vs, fs = rbox((0.36, 0.20, 0.07), bevel=0.025)
-interior.add(vs, fs, "Interior", xf=T(0.37, 1.70, 0.985))
-vs, fs = rbox((0.24, 0.012, 0.13), bevel=0.004, seg=1)
-interior.add(vs, fs, "TrimBlack", xf=T(0.0, 1.812, 0.845) @ RX(-4))
-vs, fs = rbox((0.22, 1.05, 0.26), bevel=0.03)
-interior.add(vs, fs, "Interior", xf=T(0.0, 2.30, 0.40))
-vs, fs = rbox((0.05, 0.05, 0.10), bevel=0.02)
-interior.add(vs, fs, "TrimBlack", xf=T(0.0, 2.08, 0.57))
+# passenger glovebox & driver knee bolster (high enough to preserve legroom)
+vs, fs = rbox((0.50, 0.26, 0.15), bevel=0.02)
+interior.add(vs, fs, "SeatBolster", xf=T(-0.42, 1.62, 0.64) @ RX(-8))
+vs, fs = rbox((0.44, 0.22, 0.12), bevel=0.02)
+interior.add(vs, fs, "SeatBolster", xf=T(0.37, 1.64, 0.65) @ RX(-8))
+# center lower stack bridging dash to console
+vs, fs = rbox((0.26, 0.28, 0.30), bevel=0.02)
+interior.add(vs, fs, "Interior", xf=T(0.0, 1.72, 0.56))
 
-# steering wheel (own object so it can turn about its local X axis)
+# driver instrument binnacle (cowl + twin recessed digital/analog gauges + MFD)
+vs, fs = rbox((0.35, 0.20, 0.052), bevel=0.020)
+interior.add(vs, fs, "SeatBolster", xf=T(0.37, 1.70, 0.986))
+vs, fs = rbox((0.31, 0.018, 0.105), bevel=0.008, seg=2)
+interior.add(vs, fs, "TrimBlack", xf=T(0.37, 1.780, 0.924) @ RX(-12))
+for gx in (0.435, 0.305):
+    add_cylinder_y(interior, 0.038, 0.014, "SilverTrim", T(gx, 1.785, 0.924) @ RX(-12), segs=20)
+    add_cylinder_y(interior, 0.032, 0.016, "ScreenGlow", T(gx, 1.786, 0.924) @ RX(-12), segs=20)
+vs, fs = rbox((0.052, 0.012, 0.060), bevel=0.002, seg=1)
+interior.add(vs, fs, "ScreenGlow", xf=T(0.37, 1.787, 0.922) @ RX(-12))
+
+# center infotainment stack (brushed silver frame, 8" touchscreen, knobs, vents, climate dials)
+vs, fs = rbox((0.30, 0.018, 0.24), bevel=0.008, seg=2)
+interior.add(vs, fs, "SilverTrim", xf=T(0.0, 1.798, 0.766) @ RX(-8))
+vs, fs = rbox((0.27, 0.018, 0.132), bevel=0.006, seg=1)
+interior.add(vs, fs, "TrimBlack", xf=T(0.0, 1.805, 0.808) @ RX(-8))
+vs, fs = rbox((0.195, 0.018, 0.094), bevel=0.002, seg=1)
+interior.add(vs, fs, "ScreenGlow", xf=T(0.0, 1.809, 0.808) @ RX(-8))
+for kx in (-0.114, 0.114):
+    add_cylinder_y(interior, 0.011, 0.016, "SilverTrim", T(kx, 1.814, 0.776) @ RX(-8), segs=14)
+for vx in (-0.075, 0.075):
+    vs, fs = rbox((0.115, 0.02, 0.030), bevel=0.004, seg=1)
+    interior.add(vs, fs, "SilverTrim", xf=T(vx, 1.798, 0.898) @ RX(-10))
+    vs, fs = rbox((0.100, 0.022, 0.020), bevel=0.002, seg=1)
+    interior.add(vs, fs, "TrimBlack", xf=T(vx, 1.801, 0.898) @ RX(-10))
+vs, fs = rbox((0.26, 0.018, 0.070), bevel=0.005, seg=1)
+interior.add(vs, fs, "TrimBlack", xf=T(0.0, 1.790, 0.696) @ RX(-8))
+for dx in (-0.072, 0.0, 0.072):
+    add_cylinder_y(interior, 0.015, 0.018, "SilverTrim", T(dx, 1.798, 0.696) @ RX(-8), segs=16)
+
+# passenger dash trim spear + GTE blue ambient light strip + outer side air vents
+vs, fs = rbox((0.46, 0.016, 0.028), bevel=0.004, seg=1)
+interior.add(vs, fs, "SilverTrim", xf=T(-0.42, 1.788, 0.862) @ RX(-4))
+vs, fs = rbox((0.45, 0.017, 0.008), bevel=0.0, seg=1)
+interior.add(vs, fs, "AccentBlue", xf=T(-0.42, 1.790, 0.846) @ RX(-4))
+for vx in (-0.63, 0.63):
+    vs, fs = rbox((0.11, 0.024, 0.068), bevel=0.006, seg=1)
+    interior.add(vs, fs, "SilverTrim", xf=T(vx, 1.765, 0.875) @ RX(-8))
+    vs, fs = rbox((0.095, 0.026, 0.052), bevel=0.004, seg=1)
+    interior.add(vs, fs, "TrimBlack", xf=T(vx, 1.768, 0.875) @ RX(-8))
+
+# center console, DSG shifter, cupholders & padded armrest
+vs, fs = rbox((0.21, 1.02, 0.25), bevel=0.028)
+interior.add(vs, fs, "Interior", xf=T(0.0, 2.28, 0.40))
+vs, fs = rbox((0.17, 0.48, 0.012), bevel=0.004, seg=1)
+interior.add(vs, fs, "SilverTrim", xf=T(0.0, 2.08, 0.525))
+vs, fs = rbox((0.11, 0.14, 0.016), bevel=0.004, seg=1)
+interior.add(vs, fs, "TrimBlack", xf=T(0.0, 2.03, 0.528))
+vs, fs = rbox((0.065, 0.075, 0.055), bevel=0.018)
+interior.add(vs, fs, "SeatBolster", xf=T(0.0, 2.03, 0.548))
+vs, fs = rbox((0.048, 0.058, 0.042), bevel=0.015)
+interior.add(vs, fs, "SeatBolster", xf=T(0.0, 2.03, 0.595) @ RX(-8))
+vs, fs = rbox((0.036, 0.044, 0.012), bevel=0.004, seg=1)
+interior.add(vs, fs, "SilverTrim", xf=T(0.0, 2.03, 0.614) @ RX(-8))
+vs, fs = rbox((0.046, 0.010, 0.014), bevel=0.002, seg=1)
+interior.add(vs, fs, "AccentBlue", xf=T(0.0, 2.008, 0.600) @ RX(-8))
+for cs in (2.19, 2.285):
+    add_cylinder_z(interior, 0.036, 0.014, "SilverTrim", T(0.0, cs, 0.526), segs=18)
+    add_cylinder_z(interior, 0.030, 0.016, "TrimBlack", T(0.0, cs, 0.527), segs=18)
+# raised center armrest + rear cabin vents
+vs, fs = rbox((0.19, 0.34, 0.095), bevel=0.028)
+interior.add(vs, fs, "SeatBolster", xf=T(0.0, 2.55, 0.562))
+vs, fs = rbox((0.13, 0.02, 0.08), bevel=0.004, seg=1)
+interior.add(vs, fs, "SilverTrim", xf=T(0.0, 2.785, 0.45))
+vs, fs = rbox((0.11, 0.024, 0.06), bevel=0.002, seg=1)
+interior.add(vs, fs, "TrimBlack", xf=T(0.0, 2.788, 0.45))
+
+# rearview mirror, sun visors & overhead dome console
+vs, fs = rbox((0.024, 0.045, 0.024), bevel=0.004, seg=1)
+interior.add(vs, fs, "TrimBlack", xf=T(0.0, 1.94, 1.316))
+vs, fs = rbox((0.21, 0.034, 0.054), bevel=0.012, seg=2)
+interior.add(vs, fs, "TrimBlack", xf=T(0.0, 1.96, 1.285) @ RX(8))
+vs, fs = rbox((0.19, 0.006, 0.042), bevel=0.004, seg=1)
+interior.add(vs, fs, "Chrome", xf=T(0.0, 1.976, 1.285) @ RX(8))
+for vx in (-0.28, 0.28):
+    vs, fs = rbox((0.26, 0.085, 0.016), bevel=0.005, seg=1)
+    interior.add(vs, fs, "SeatBolster", xf=T(vx, 2.24, 1.348) @ RX(2))
+vs, fs = rbox((0.15, 0.10, 0.020), bevel=0.006, seg=1)
+interior.add(vs, fs, "Interior", xf=T(0.0, 2.24, 1.378))
+vs, fs = rbox((0.08, 0.04, 0.022), bevel=0.004, seg=1)
+interior.add(vs, fs, "HeadlightLens", xf=T(0.0, 2.25, 1.376))
+
+
+# interior door cards (mounted on each hinged door object)
+def add_door_card(mb, sg, s0, s1, arm_s0, arm_s1, handle_s, spk_s, upper_s1):
+    s_mid = (s0 + s1) / 2
+    arm_mid = (arm_s0 + arm_s1) / 2
+    up_mid = (s0 + upper_s1) / 2
+    # main door panel nestled into the inner door skin
+    vs, fs = rbox((0.055, s1 - s0, 0.56), bevel=0.015, seg=2)
+    mb.add(vs, fs, "Interior", xf=T(sg * 0.838, s_mid, 0.58))
+    # upper silver spear + GTE blue ambient light strip
+    vs, fs = rbox((0.024, upper_s1 - s0 - 0.04, 0.024), bevel=0.005, seg=1)
+    mb.add(vs, fs, "SilverTrim", xf=T(sg * 0.808, up_mid, 0.815))
+    vs, fs = rbox((0.022, upper_s1 - s0 - 0.06, 0.008), bevel=0.0, seg=1)
+    mb.add(vs, fs, "AccentBlue", xf=T(sg * 0.806, up_mid, 0.798))
+    # padded armrest + window switch pod
+    vs, fs = rbox((0.072, arm_s1 - arm_s0, 0.058), bevel=0.018, seg=2)
+    mb.add(vs, fs, "SeatBolster", xf=T(sg * 0.785, arm_mid, 0.605))
+    vs, fs = rbox((0.040, 0.14, 0.018), bevel=0.004, seg=1)
+    mb.add(vs, fs, "TrimBlack", xf=T(sg * 0.778, arm_s0 + 0.14, 0.630))
+    # door release handle
+    vs, fs = rbox((0.022, 0.095, 0.036), bevel=0.005, seg=1)
+    mb.add(vs, fs, "TrimBlack", xf=T(sg * 0.808, handle_s, 0.765))
+    vs, fs = rbox((0.026, 0.072, 0.018), bevel=0.004, seg=1)
+    mb.add(vs, fs, "SilverTrim", xf=T(sg * 0.802, handle_s, 0.765))
+    # lower speaker grille + map pocket
+    vs, fs = rbox((0.028, (s1 - s0) * 0.65, 0.11), bevel=0.010, seg=2)
+    mb.add(vs, fs, "SeatBolster", xf=T(sg * 0.806, s_mid + 0.06, 0.365))
+    add_cylinder_x(mb, 0.072, 0.016, "SilverTrim", T(sg * 0.808, spk_s, 0.38))
+    add_cylinder_x(mb, 0.064, 0.018, "TrimBlack", T(sg * 0.806, spk_s, 0.38))
+
+
+def add_cylinder_x(mb, radius, thickness, mat, xf, segs=18):
+    vs, fs = lathe([(radius, -thickness / 2), (radius, thickness / 2)], segs, False)
+    mb.add(vs, fs, mat, xf=xf)
+    for sx in (-1, 1):
+        dvs, dfs = disc(radius, sx * thickness / 2, segs)
+        mb.add(dvs, dfs, mat, orient=lambda c, sx=sx, xf=xf: (xf.to_3x3() @ Vector((sx, 0, 0))), xf=xf)
+
+
+for sg, side in ((1, "L"), (-1, "R")):
+    add_door_card(DOORS["Door_F" + side], sg, 1.44, 2.58, 1.88, 2.48, 1.98, 1.66, 2.58)
+    add_door_card(DOORS["Door_R" + side], sg, 2.66, 3.10, 2.74, 3.06, 2.86, 2.78, 3.22)
+
+# steering wheel (own object so it can turn about its local X axis; origin V(0.37, 1.94, 0.90), SW_R=0.185)
 sw = MB()
 SW_R = 0.185
-tube = [(SW_R + 0.016 * math.cos(2 * math.pi * a / 8), 0.016 * math.sin(2 * math.pi * a / 8)) for a in range(8)]
-vs, fs = lathe(tube, 28, True)
-sw.add(vs, fs, "TrimBlack", orient=lambda c: c - Vector((0, c.y, c.z)).normalized() * SW_R)
-vs, fs = rbox((0.05, 0.10, 0.08), bevel=0.02)
-sw.add(vs, fs, "TrimBlack", xf=Matrix.Translation((-0.015, 0, 0)))
-for dims, cen in (((0.014, 0.034, 0.17), (-0.008, 0, -0.095)), ((0.014, 0.17, 0.034), (-0.008, 0.095, 0.0)),
-                  ((0.014, 0.17, 0.034), (-0.008, -0.095, 0.0))):
-    vs, fs = rbox(dims, bevel=0.005, seg=1)
-    sw.add(vs, fs, "TrimBlack", xf=Matrix.Translation(cen))
-vs, fs = rbox((0.20, 0.05, 0.05), bevel=0.01, seg=1)           # column
-sw.add(vs, fs, "Interior", xf=Matrix.Translation((-0.11, 0, 0)))
+SW_SEGS, TUBE_SEGS = 32, 10
+rim_center = []
+for a in range(SW_SEGS):
+    ph = 2 * math.pi * a / SW_SEGS
+    cy, cz = SW_R * math.cos(ph), SW_R * math.sin(ph)
+    if cz < -0.152:
+        cz = -0.152 - (cz + 0.152) * 0.18        # flat-bottom GTE rim profile
+    rim_center.append(Vector((0.0, cy, cz)))
+rim_vs, rim_fs = [], []
+for a in range(SW_SEGS):
+    p0 = rim_center[(a - 1) % SW_SEGS]
+    p1 = rim_center[(a + 1) % SW_SEGS]
+    t = (p1 - p0).normalized()
+    n_rad = Vector((0.0, t.z, -t.y)).normalized()
+    if n_rad.dot(rim_center[a]) < 0:
+        n_rad = -n_rad
+    n_ax = Vector((1.0, 0.0, 0.0))
+    for b in range(TUBE_SEGS):
+        th = 2 * math.pi * b / TUBE_SEGS
+        rim_vs.append(rim_center[a] + n_rad * (0.0165 * math.cos(th)) + n_ax * (0.0155 * math.sin(th)))
+for a in range(SW_SEGS):
+    na = (a + 1) % SW_SEGS
+    for b in range(TUBE_SEGS):
+        nb = (b + 1) % TUBE_SEGS
+        rim_fs.append([a * TUBE_SEGS + b, a * TUBE_SEGS + nb, na * TUBE_SEGS + nb, na * TUBE_SEGS + b])
+sw.add(rim_vs, rim_fs, "SeatBolster")
+# top 12-o'clock GTE blue centering stripe (flush collar)
+vs, fs = rbox((0.0325, 0.012, 0.0345), bevel=0.004, seg=1)
+sw.add(vs, fs, "AccentBlue", xf=Matrix.Translation((0.0, 0.0, SW_R)))
+# round central airbag boss + chrome VW ring & emblem
+add_cylinder_x(sw, 0.064, 0.044, "SeatBolster", Matrix.Translation((-0.008, 0.0, 0.0)), segs=22)
+vs, fs = lathe([(0.030, 0.0145), (0.025, 0.0155), (0.025, 0.0135)], 20, False)
+sw.add(vs, fs, "Chrome")
+for line in [[(-0.010, 0.019), (0.0, 0.003), (0.010, 0.019)],
+             [(-0.017, 0.006), (-0.008, -0.018), (0.0, 0.0), (0.008, -0.018), (0.017, 0.006)]]:
+    for (y0, z0), (y1, z1) in zip(line, line[1:]):
+        p0, p1 = Vector((0.0155, y0, z0)), Vector((0.0155, y1, z1))
+        d = (p1 - p0).normalized()
+        n = Vector((0.0, -d.z, d.y)) * 0.0018
+        sw.add([p0 - d * 0.001 - n, p1 + d * 0.001 - n, p1 + d * 0.001 + n, p0 - d * 0.001 + n],
+               [[0, 1, 2, 3]], "Chrome", orient=lambda c: Vector((1, 0, 0)))
+# 9 & 3 o'clock silver spokes + multifunction button pods
+for sy in (-1, 1):
+    vs, fs = rbox((0.016, 0.145, 0.034), bevel=0.006, seg=2)
+    sw.add(vs, fs, "SilverTrim", xf=Matrix.Translation((-0.008, sy * 0.105, 0.0)))
+    vs, fs = rbox((0.020, 0.048, 0.036), bevel=0.004, seg=1)
+    sw.add(vs, fs, "TrimBlack", xf=Matrix.Translation((-0.003, sy * 0.100, 0.0)))
+# split 6 o'clock silver spoke + GTE blue clasp
+for sy in (-1, 1):
+    vs, fs = rbox((0.014, 0.012, 0.125), bevel=0.003, seg=1)
+    sw.add(vs, fs, "SilverTrim", xf=Matrix.Translation((-0.008, sy * 0.016, -0.095)))
+vs, fs = rbox((0.018, 0.032, 0.024), bevel=0.004, seg=1)
+sw.add(vs, fs, "AccentBlue", xf=Matrix.Translation((-0.004, 0.0, -0.128)))
+# steering column & indicator/wiper stalks
+vs, fs = rbox((0.20, 0.068, 0.068), bevel=0.015, seg=2)
+sw.add(vs, fs, "Interior", xf=Matrix.Translation((-0.11, 0.0, 0.0)))
+for sy in (-1, 1):
+    vs, fs = rbox((0.016, 0.095, 0.016), bevel=0.004, seg=1)
+    sw.add(vs, fs, "TrimBlack", xf=Matrix.Translation((-0.055, sy * 0.075, 0.012)))
 
 # =================================================================== WHEELS
 wh = MB()
 hw_t = TYRE_W / 2
-tyre = [(0.204, 0.086), (0.235, 0.100), (0.272, hw_t), (0.298, 0.098), (0.311, 0.084), (TYRE_R, 0.055),
-        (TYRE_R, -0.055), (0.311, -0.084), (0.298, -0.098), (0.272, -hw_t), (0.235, -0.100), (0.204, -0.086),
-        (0.198, -0.08), (0.198, 0.08)]
+tyre = [(0.229, 0.086), (0.254, 0.100), (0.282, hw_t), (0.302, 0.098), (0.312, 0.084), (TYRE_R, 0.055),
+        (TYRE_R, -0.055), (0.312, -0.084), (0.302, -0.098), (0.282, -hw_t), (0.254, -0.100), (0.229, -0.086),
+        (0.223, -0.08), (0.223, 0.08)]
 SEG = 36
 vs, fs = lathe(tyre, SEG, True)
-wh.add(vs, fs, "Tyre", orient=lambda c: c - Vector((0, c.y, c.z)).normalized() * 0.26)
+wh.add(vs, fs, "Tyre", orient=lambda c: c - Vector((0, c.y, c.z)).normalized() * 0.27)
 for gx in (-0.03, 0.03):                                         # tread grooves
     vs, fs = lathe([(TYRE_R + 0.0008, gx - 0.006), (TYRE_R + 0.0008, gx + 0.006)], SEG, False)
     wh.add(vs, fs, "Underbody", orient=lambda c: Vector((0, c.y, c.z)))
-rim = [(0.209, 0.090), (0.209, 0.096), (0.199, 0.096), (0.192, 0.080), (0.186, 0.040), (0.186, -0.085), (0.206, -0.092)]
+rim = [(0.234, 0.090), (0.234, 0.096), (0.224, 0.096), (0.217, 0.080), (0.211, 0.040), (0.211, -0.085), (0.231, -0.092)]
 vs, fs = lathe(rim, SEG, False)
 wh.add(vs, fs, "Alloy", orient=lambda c: Vector((1.2, -c.y, -c.z)) if c.x > 0.085 else Vector((0.0, -c.y, -c.z)))
-vs, fs = disc(0.188, -0.03, SEG)
+vs, fs = disc(0.213, -0.03, SEG)
 wh.add(vs, fs, "Underbody", orient=lambda c: Vector((1, 0, 0)))
-vs, fs = disc(0.188, -0.088, SEG)
+vs, fs = disc(0.213, -0.088, SEG)
 wh.add(vs, fs, "Underbody", orient=lambda c: Vector((-1, 0, 0)))
-vs, fs = lathe([(0.150, 0.0), (0.150, 0.022), (0.0, 0.022)], SEG, False)   # brake disc
+vs, fs = lathe([(0.168, 0.0), (0.168, 0.022), (0.0, 0.022)], SEG, False)   # brake disc
 wh.add(vs, fs, "BrakeDisc", orient=lambda c: Vector((1, c.y, c.z)))
 vs, fs = lathe([(0.062, 0.02), (0.062, 0.068), (0.050, 0.078), (0.030, 0.080), (0.0, 0.080)], 20, False)
 wh.add(vs, fs, "Alloy", orient=lambda c: Vector((1, c.y * 4, c.z * 4)))
-vs, fs = disc(0.027, 0.0815, 16)
+vs, fs = disc(0.028, 0.0815, 16)
 wh.add(vs, fs, "TrimBlack", orient=lambda c: Vector((1, 0, 0)))
+vs, fs = lathe([(0.028, 0.082), (0.023, 0.082)], 18, False)
+wh.add(vs, fs, "Chrome", orient=lambda c: Vector((1, 0, 0)))
 for sp in range(5):
     th = 2 * math.pi * sp / 5 + math.pi / 2
+    # lug bolts
+    lug_y, lug_z = 0.042 * math.cos(th), 0.042 * math.sin(th)
+    add_cylinder_x(wh, 0.007, 0.012, "SilverTrim", Matrix.Translation((0.074, lug_y, lug_z)), segs=10)
+    # 5-twin-spoke (10 blades) gloss black alloys
     for dsg in (-1, 1):
-        a1, a2 = th + dsg * 0.16, th + dsg * 0.24
-        p1 = Vector((0, 0.050 * math.cos(a1), 0.050 * math.sin(a1)))
-        p2 = Vector((0, 0.196 * math.cos(a2), 0.196 * math.sin(a2)))
+        a1, a2 = th + dsg * 0.14, th + dsg * 0.22
+        p1 = Vector((0, 0.052 * math.cos(a1), 0.052 * math.sin(a1)))
+        p2 = Vector((0, 0.220 * math.cos(a2), 0.220 * math.sin(a2)))
         d = (p2 - p1).normalized()
         pr = Vector((0, -d.z, d.y))
         pts = []
-        for p, hwid, xf_, in ((p1, 0.013, 0.072), (p2, 0.010, 0.088)):
+        for p, hwid, xf_, in ((p1, 0.011, 0.074), (p2, 0.0085, 0.090)):
             for xx in (xf_, xf_ - 0.024):
                 pts += [p + pr * hwid + Vector((xx, 0, 0)), p - pr * hwid + Vector((xx, 0, 0))]
-        # pts: 0,1 front@p1  2,3 back@p1  4,5 front@p2  6,7 back@p2
         faces = [[0, 1, 5, 4], [2, 3, 7, 6], [0, 2, 6, 4], [1, 3, 7, 5], [0, 1, 3, 2], [4, 5, 7, 6]]
         cen = sum(pts, Vector((0, 0, 0))) / 8
         wh.add(pts, faces, "Alloy", orient=lambda c, cen=cen: c - cen)
+
+# stationary GTE blue brake calipers mounted on the body at all 4 wheel hubs
+for sg, s_ax, tr in ((1, S_FRONT_AXLE, TRACK_F), (-1, S_FRONT_AXLE, TRACK_F),
+                     (1, S_REAR_AXLE, TRACK_R), (-1, S_REAR_AXLE, TRACK_R)):
+    cal_xf = T(sg * (tr / 2 + 0.014), s_ax + 0.118, TYRE_R + 0.055) @ RX(-26)
+    vs, fs = rbox((0.044, 0.072, 0.112), bevel=0.012, seg=2)
+    body.add(vs, fs, "AccentBlue", xf=cal_xf)
 
 # ================================================================= ASSEMBLE
 objs = []
@@ -932,6 +1301,12 @@ if DO_RENDER:
     so = bpy.data.objects.new("Sun", sun)
     so.rotation_euler = (math.radians(52), 0, math.radians(-35))
     scene.collection.objects.link(so)
+    cabin_light = bpy.data.lights.new("CabinFill", 'POINT')
+    cabin_light.energy = 0.0
+    cabin_light.shadow_soft_size = 0.35
+    clo = bpy.data.objects.new("CabinFill", cabin_light)
+    clo.location = V(0.0, 2.35, 1.24)
+    scene.collection.objects.link(clo)
     w = bpy.data.worlds.new("World")
     try:
         w.use_nodes = True
@@ -962,11 +1337,13 @@ if DO_RENDER:
         "rear": ((0, 8.0, 0.95), (0, 0, 0.72), 80),
         "top": ((0.01, 0.0, 9.0), (0, 0, 0.5), 60),
         "interior": ((1.9, 0.9, 1.75), (0.1, 0.2, 0.75), 35),
+        "interior_cabin": ((-0.08, 0.52, 1.12), (0.14, -0.45, 0.76), 24),
     }
     only = [a[7:] for a in ARGV if a.startswith("--shot=")]
     for name, (loc, tgt, lens) in shots.items():
         if only and name not in only:
             continue
+        cabin_light.energy = 14.0 if name.startswith("interior") else 0.0
         co.location = loc
         cam.lens = lens
         co.rotation_euler = (Vector(tgt) - Vector(loc)).to_track_quat('-Z', 'Y').to_euler()

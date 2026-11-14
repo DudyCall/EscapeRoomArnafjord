@@ -21,6 +21,8 @@ namespace Arnafjordur.UI
         private Text _followLabel;
         private Image _roamBackground;
         private Text _roamLabel;
+        private Image _viewBackground;
+        private Text _viewLabel;
         private Text _statusLabel;
         private Font _uiFont;
         private bool _built;
@@ -137,7 +139,7 @@ namespace Arnafjordur.UI
 
         private void BuildCompanionBar(RectTransform root)
         {
-            GameObject bar = CreatePanel("CompanionBar", root, new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(-20f, -20f), new Vector2(300f, 54f), Palette.UiPanelSlate);
+            GameObject bar = CreatePanel("CompanionBar", root, new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(-20f, -20f), new Vector2(456f, 54f), Palette.UiPanelSlate);
             HorizontalLayoutGroup layout = bar.AddComponent<HorizontalLayoutGroup>();
             layout.padding = new RectOffset(8, 8, 8, 8);
             layout.spacing = 8f;
@@ -151,11 +153,14 @@ namespace Arnafjordur.UI
 
             Button roamBtn = CreateButton("Btn_Roam", bar.transform, "Roam [R]", out _roamBackground, out _roamLabel);
             roamBtn.onClick.AddListener(() => party?.ToggleRoam());
+
+            Button viewBtn = CreateButton("Btn_FirstPerson", bar.transform, "1st Person [V]", out _viewBackground, out _viewLabel);
+            viewBtn.onClick.AddListener(() => party?.ToggleFirstPerson());
         }
 
         private void BuildControlsFooter(RectTransform root)
         {
-            GameObject footer = CreatePanel("ControlsFooter", root, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 18f), new Vector2(1020f, 54f), Palette.UiPanelSlate);
+            GameObject footer = CreatePanel("ControlsFooter", root, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 18f), new Vector2(1180f, 54f), Palette.UiPanelSlate);
 
             _statusLabel = CreateText("ControlsText", footer.transform, 16, TextAnchor.MiddleCenter, Palette.UiTextParchment);
             RectTransform textRect = _statusLabel.rectTransform;
@@ -184,6 +189,7 @@ namespace Arnafjordur.UI
             PartyController.CompanionMode mode = party != null ? party.CurrentCompanionMode : PartyController.CompanionMode.Stay;
             bool followOn = mode == PartyController.CompanionMode.Follow;
             bool roamOn = mode == PartyController.CompanionMode.Roam;
+            bool firstPerson = party != null && party.IsFirstPerson;
 
             _followBackground.color = followOn ? Palette.UiConfirmGreen : Palette.WetBasalt;
             _followLabel.color = followOn ? Palette.DeepFjordSlate : Palette.UiTextParchment;
@@ -193,10 +199,15 @@ namespace Arnafjordur.UI
             _roamLabel.color = roamOn ? Palette.DeepFjordSlate : Palette.UiTextParchment;
             _roamLabel.fontStyle = roamOn ? FontStyle.Bold : FontStyle.Normal;
 
+            _viewBackground.color = firstPerson ? Palette.UiConfirmGreen : Palette.WetBasalt;
+            _viewLabel.color = firstPerson ? Palette.DeepFjordSlate : Palette.UiTextParchment;
+            _viewLabel.fontStyle = firstPerson ? FontStyle.Bold : FontStyle.Normal;
+
             string activeName = party != null && party.ActiveCharacter != null ? party.ActiveCharacter.DisplayName : "None";
+            string viewMode = firstPerson ? "1st Person" : "3rd Person";
             _statusLabel.text =
-                $"Active: {activeName}  |  Companions: {mode}   —   " +
-                "WASD/Arrows: Move  •  Shift: Run  •  Click Ground: Move  •  Right-Drag / Q-E: Orbit  •  Scroll: Zoom  •  1-3/Tab: Switch  •  F/R: Follow/Roam";
+                $"Active: {activeName}  |  View: {viewMode}  |  Companions: {mode}   —   " +
+                "WASD/Arrows: Move  •  Shift: Run  •  Click: Move  •  Right-Drag/Q-E: Look  •  Scroll: Zoom  •  V: 1st/3rd  •  1-3/Tab: Switch  •  F/R: Follow/Roam";
         }
 
         private GameObject CreatePanel(string name, RectTransform parent, Vector2 anchor, Vector2 pivot, Vector2 anchoredPos, Vector2 size, Color color)

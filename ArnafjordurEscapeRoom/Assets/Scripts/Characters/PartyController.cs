@@ -48,16 +48,25 @@ namespace Arnafjordur.Characters
         /// <summary>Active companion autonomy mode for non-selected party members.</summary>
         public CompanionMode CurrentCompanionMode => companionMode;
 
+        /// <summary>True when the camera rig is currently in first-person view.</summary>
+        public bool IsFirstPerson => cameraRig != null && cameraRig.IsFirstPerson;
+
         /// <summary>
         /// Assigns party members and camera links cleanly from Editor setup or runtime tests.
         /// </summary>
         public void Configure(CharacterMotor[] party, ThirdPersonCameraRig rig, Camera cam = null)
         {
+            BindCameraEvents(false);
             characters = party ?? Array.Empty<CharacterMotor>();
             cameraRig = rig;
             raycastCamera = cam != null ? cam : Camera.main;
             _nextRoamTime = new float[characters.Length];
             activeIndex = characters.Length > 0 ? Mathf.Clamp(activeIndex, 0, characters.Length - 1) : 0;
+
+            if (isActiveAndEnabled)
+            {
+                BindCameraEvents(true);
+            }
 
             if (cameraRig != null && ActiveCharacter != null)
             {
@@ -72,13 +81,54 @@ namespace Arnafjordur.Characters
             EnsureStateArrays();
         }
 
+        private void OnEnable()
+        {
+            BindCameraEvents(true);
+        }
+
+        private void OnDisable()
+        {
+            BindCameraEvents(false);
+        }
+
         private void Start()
         {
+            BindCameraEvents(true);
             if (cameraRig != null && ActiveCharacter != null)
             {
                 cameraRig.SetTarget(ActiveCharacter.transform, snap: true);
             }
 
+            StateChanged?.Invoke();
+        }
+
+        /// <summary>Toggles between first-person and third-person view on the attached camera rig.</summary>
+        public void ToggleFirstPerson()
+        {
+            if (cameraRig != null)
+            {
+                cameraRig.ToggleFirstPerson();
+            }
+
+            StateChanged?.Invoke();
+        }
+
+        private void BindCameraEvents(bool subscribe)
+        {
+            if (cameraRig == null)
+            {
+                return;
+            }
+
+            cameraRig.ViewModeChanged -= OnCameraViewModeChanged;
+            if (subscribe)
+            {
+                cameraRig.ViewModeChanged += OnCameraViewModeChanged;
+            }
+        }
+
+        private void OnCameraViewModeChanged(bool _)
+        {
             StateChanged?.Invoke();
         }
 

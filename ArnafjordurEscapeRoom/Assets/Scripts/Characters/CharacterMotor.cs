@@ -61,6 +61,9 @@ namespace Arnafjordur.Characters
         /// <summary>Current target world point when <see cref="HasDestination"/> is true.</summary>
         public Vector3 Destination => _destination;
 
+        /// <summary>When set (e.g. in first-person view), locks the character's horizontal facing to the camera yaw.</summary>
+        public float? LookYawOverride { get; set; }
+
         private void Awake()
         {
             _controller = GetComponent<CharacterController>();
@@ -215,6 +218,13 @@ namespace Arnafjordur.Characters
 
         private void UpdateFacing(Vector3 desiredHorizontal, float dt)
         {
+            if (LookYawOverride.HasValue)
+            {
+                Quaternion lookRot = Quaternion.Euler(0f, LookYawOverride.Value, 0f);
+                transform.rotation = Quaternion.RotateTowards(transform.rotation, lookRot, turnSpeedDeg * dt);
+                return;
+            }
+
             if (desiredHorizontal.sqrMagnitude <= 0.0004f)
             {
                 return;
