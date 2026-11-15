@@ -97,6 +97,9 @@ namespace Arnafjordur.Characters
 
         private KnockdownPhase _knockdownPhase;
         private float _knockdownElapsed;
+        [SerializeField, Min(0f), Tooltip("Beers already in the character when the scene starts (e.g. drunk in the car).")]
+        private float startingBeers;
+
         private bool _pendingPukeAndFall;
         private bool _puddleSpawned;
         private Transform _currentPuddleRoot;
@@ -185,6 +188,14 @@ namespace Arnafjordur.Characters
             _phaseOffset = Mathf.Abs(gameObject.name.GetHashCode() % 100) * 0.031f;
             ResolveBones();
         }
+
+        private void Start()
+        {
+            if (startingBeers > 0f && BeersDrunk <= 0f) SetBeersDrunk(startingBeers);
+        }
+
+        /// <summary>Builder hook: beers the character has already had when the scene starts.</summary>
+        public void SetStartingBeers(float beers) => startingBeers = Mathf.Max(0f, beers);
 
         private void OnDisable()
         {

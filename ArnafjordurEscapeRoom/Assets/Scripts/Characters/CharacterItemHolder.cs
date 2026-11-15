@@ -18,6 +18,9 @@ namespace Arnafjordur.Characters
         [SerializeField] private Transform lowerArmBone;
         [SerializeField] private Transform handBone;
         [SerializeField] private Transform headBone;
+        [SerializeField] private Transform leftUpperArmBone;
+        [SerializeField] private Transform leftLowerArmBone;
+        [SerializeField] private Transform leftHandBone;
         [SerializeField] private Vector3 gripLocal;
         [SerializeField] private Vector3 mouthOffset = new Vector3(0f, -0.03f, 0.11f);
         [SerializeField] private PickupItem startingItem;
@@ -56,6 +59,24 @@ namespace Arnafjordur.Characters
 
         /// <summary>Hand bone transform used as the attachment parent.</summary>
         public Transform HandBone => handBone;
+
+        /// <summary>Head bone transform used for mouth-targeted animations.</summary>
+        public Transform HeadBone => headBone;
+
+        /// <summary>Left upper arm bone transform.</summary>
+        public Transform LeftUpperArmBone => leftUpperArmBone;
+
+        /// <summary>Left lower arm bone transform.</summary>
+        public Transform LeftLowerArmBone => leftLowerArmBone;
+
+        /// <summary>Left hand bone transform.</summary>
+        public Transform LeftHandBone => leftHandBone;
+
+        /// <summary>World position of the character's mouth.</summary>
+        public Vector3 GetMouthWorldPosition() =>
+            headBone != null
+                ? headBone.position + transform.right * mouthOffset.x + transform.up * mouthOffset.y + transform.forward * mouthOffset.z
+                : transform.position + transform.up * 1.55f + transform.forward * 0.11f;
 
         /// <summary>Centre of the closed fist in <see cref="HandBone"/> local space.</summary>
         public Vector3 GripLocal => gripLocal;
@@ -124,6 +145,9 @@ namespace Arnafjordur.Characters
             if (lowerArmBone == null) lowerArmBone = FindDeepChild(transform, "RightLowerArm");
             if (handBone == null) handBone = FindDeepChild(transform, "RightHand");
             if (headBone == null) headBone = FindDeepChild(transform, "Head");
+            if (leftUpperArmBone == null) leftUpperArmBone = FindDeepChild(transform, "LeftUpperArm");
+            if (leftLowerArmBone == null) leftLowerArmBone = FindDeepChild(transform, "LeftLowerArm");
+            if (leftHandBone == null) leftHandBone = FindDeepChild(transform, "LeftHand");
         }
 
         private void LateUpdate()
@@ -175,6 +199,10 @@ namespace Arnafjordur.Characters
             }
 
             PoseHeldItem();
+            if (TryGetComponent(out CharacterSmoker smoker))
+            {
+                smoker.TickAndPose(this);
+            }
         }
 
         /// <summary>Uses the currently held item (e.g., takes a swig when holding a drinkable item).</summary>
@@ -234,6 +262,12 @@ namespace Arnafjordur.Characters
             bool inspectingBomb = SeaMineBomb.Active != null && TryGetComponent(out CharacterMotor motor) && SeaMineBomb.Active.IsInspecting(motor);
             bool drunkOverrides = TryGetComponent(out CharacterDrunk drunk) && drunk.OverridesArmPose;
             bool overrideArms = inspectingBomb || drunkOverrides;
+            if (HeldItem.TwoHanded && hasArmRig && !overrideArms && leftUpperArmBone != null && leftLowerArmBone != null && leftHandBone != null)
+            {
+                PoseTwoHanded(up, forward, right);
+                return;
+            }
+
             Vector3 baseAxis = HeldItem.KeepUpright ? up : handBone.up;
             if (drunkOverrides && drunk != null)
             {
@@ -280,6 +314,15 @@ namespace Arnafjordur.Characters
                     pole = Vector3.Slerp(pole, sipPole, _currentSip).normalized;
                     axis = Vector3.Slerp(baseAxis, sipAxis, _currentSip).normalized;
                 }
+                else if (TryGetComponent(out CharacterSmoker smoker)
+                    && smoker.TryGetRightArmLighterPose(this, baseFist, pole, baseAxis,
+                        out Vector3 lightFist, out Vector3 lightPole, out Vector3 lightAxis, out float lightWeight)
+                    && lightWeight > 0.001f)
+                {
+                    fistTarget = lightFist;
+                    pole = lightPole;
+                    axis = lightAxis;
+                }
 
                 for (int pass = 0; pass < 3; pass++)
                 {
@@ -307,9 +350,43 @@ namespace Arnafjordur.Characters
                 across = Vector3.forward;
             }
 
-            Quaternion rot = Quaternion.LookRotation(across.normalized, axis) * Quaternion.Euler(HeldItem.HeldEulerOffset);
-            Vector3 pos = handBone.TransformPoint(gripLocal) + axis * HeldItem.GripBelowCentre;
+            Quaternion baseRot = Quaternion.LookRotation(across.normalized, axis);
+            Quaternion rot = baseRot * Quaternion.Euler(HeldItem.HeldEulerOffset);
+            Vector3 pos = handBone.TransformPoint(gripLocal) + axis * HeldItem.GripBelowCentre + baseRot * HeldItem.HeldLocalOffset;
             HeldItem.transform.SetPositionAndRotation(pos, rot);
+        }
+
+        /// <summary>
+        /// Long items (wood, planks) are carried crosswise in front of the hips with both hands,
+        /// forearms forward and elbows tucked in, the way you'd haul firewood.
+        /// </summary>
+        private void PoseTwoHanded(Vector3 up, Vector3 forward, Vector3 right)
+        {
+            const float gripHalfWidth = 0.19f;
+            Vector3 centre = transform.position + up * 0.98f + forward * 0.34f;
+            Vector3 rightFist = centre + right * gripHalfWidth;
+            Vector3 leftFist = centre - right * gripHalfWidth;
+            Vector3 rightPole = -up + right * 0.5f - forward * 0.3f;
+            Vector3 leftPole = -up - right * 0.5f - forward * 0.3f;
+
+            for (int pass = 0; pass < 3; pass++)
+            {
+                BeerDrinker.SolveArm(upperArmBone, lowerArmBone, handBone,
+                    handBone.position + (rightFist - handBone.TransformPoint(gripLocal)), rightPole);
+                // the left hand has no measured fist offset; the right one mirrored across the body is close enough
+                Vector3 mirroredOffset = Vector3.Reflect(handBone.TransformPoint(gripLocal) - handBone.position, right);
+                Vector3 leftFistNow = leftHandBone.position + mirroredOffset;
+                BeerDrinker.SolveArm(leftUpperArmBone, leftLowerArmBone, leftHandBone,
+                    leftHandBone.position + (leftFist - leftFistNow), leftPole);
+            }
+
+            // lay the item's longest local axis across the body, its thinnest facing up
+            Vector3 s = HeldItem.transform.localScale;
+            Quaternion rot;
+            if (s.y >= s.x && s.y >= s.z) rot = Quaternion.LookRotation(forward, right);   // log: +Y runs left-right
+            else if (s.z >= s.x) rot = Quaternion.LookRotation(right, up);                 // plank: +Z runs left-right, flat
+            else rot = Quaternion.LookRotation(forward, up);                                // +X already runs left-right
+            HeldItem.transform.SetPositionAndRotation(centre + up * 0.03f, rot);
         }
 
         private void RefreshCarryAnimSwing(float side)
@@ -371,6 +448,22 @@ namespace Arnafjordur.Characters
         }
 
         /// <summary>Drops the currently held item onto the ground in front of the character.</summary>
+        /// <summary>Lets go of the held item without putting it on the ground (e.g. back into a pocket).</summary>
+        public PickupItem ReleaseHeldItem()
+        {
+            if (HeldItem == null) return null;
+            _isDrinking = false;
+            _sipElapsed = 0f;
+            _currentSip = 0f;
+            _hasLastSolvedPose = false;
+            _cachedAnimSwing = Vector3.zero;
+            PickupItem item = HeldItem;
+            item.OnDropped(transform);
+            HeldItem = null;
+            HeldItemChanged?.Invoke(null);
+            return item;
+        }
+
         public PickupItem DropHeldItem()
         {
             if (HeldItem == null)

@@ -179,8 +179,6 @@ road = densify(road_line, 2.5)
 
 # ------------------------------------------------------------------ 3. footpaths (drawn as gravel ribbons by the Unity scene builder)
 footpaths = {
-    # from the parking bay straight down the bank to the road, so nobody has to walk round by the turn-off
-    "ChurchPath": [(PARK["x"] + 0.9, PARK["z"] + 2.3), (400.6, 286.6), (402.0, 290.4), (402.75, 293.55)],
     # north bank of the Stórá, between the river and the first houses, from the bridge down to the beach
     "BeachPathSouth": [(395.45, 315.2), (400.5, 315.6), (408.0, 315.3), (416.5, 314.6), (423.5, 315.4), (430.0, 317.5)],
     # further along the street, a second way down between the houses
@@ -294,6 +292,20 @@ for iz, z in enumerate(zs):
             gmask[iz, ix] = False
 grass, grass_area = zone_outline(gmask, gxs, zs, (430.0, 317.5))
 
+church_parking = [
+    (397.8, 280.0),
+    (402.1, 279.2),
+    (407.6, 280.0),
+    (416.5, 279.0),
+    (419.3, 279.4),
+    (413.9, 282.2),
+    (408.8, 286.1),
+    (405.3, 290.0),
+    (402.2, 294.4),
+    (399.0, 294.0),
+    (397.8, 285.5),
+]
+
 data = {
     "seaLevel": SEA,
     "corridors": [
@@ -309,6 +321,7 @@ data = {
     "zones": [
         {"name": "Beach", "outline": with_height(beach, terrain_y)},
         {"name": "VillageGrass", "outline": with_height(grass, terrain_y)},
+        {"name": "ChurchParking", "outline": with_height(church_parking, terrain_y)},
     ],
     "houses": [{"x": round(a, 2), "z": round(b, 2), "yaw": round(c, 4), "halfWidth": round(d, 2), "halfDepth": round(e, 2)}
                for a, b, c, d, e in HOUSES],

@@ -284,6 +284,16 @@ namespace Arnafjordur.Characters
         }
 
         /// <summary>Drops the active character's held item, or picks up (or walks to) the nearest unheld item.</summary>
+        /// <summary>Takes the next thing out of the active character's pockets, or puts the held one back.</summary>
+        public bool CyclePocket()
+        {
+            CharacterItemHolder holder = ActiveItemHolder;
+            if (holder == null || !holder.TryGetComponent(out CharacterPockets pockets)) return false;
+            bool changed = pockets.Cycle(holder);
+            if (changed) StateChanged?.Invoke();
+            return changed;
+        }
+
         public bool ToggleCarryItem()
         {
             _pendingPickup = null;
@@ -391,6 +401,7 @@ namespace Arnafjordur.Characters
             if (kb.fKey.wasPressedThisFrame) ToggleFollow();
             if (kb.rKey.wasPressedThisFrame) ToggleRoam();
             if (kb.gKey.wasPressedThisFrame) ToggleCarryItem();
+            if (kb.iKey.wasPressedThisFrame) CyclePocket();
             if (kb.uKey.wasPressedThisFrame || kb.spaceKey.wasPressedThisFrame) UseActiveItem();
         }
 

@@ -9,8 +9,9 @@ namespace Arnafjordur.Characters
 {
     /// <summary>
     /// Washed-up atomic sea mine on the Árnafjørður beach: runs the 1-hour countdown timer,
-    /// holds the 6 decipher modules (Module 1 word "TØNT" and Module 2 8 on/off contacts implemented;
-    /// Modules 3–6 placeholders), deducts 1 minute on wrong submissions, and drives the inspecting
+    /// holds the 6 decipher modules (Module 1 word "TØNT", Module 2 10 on/off contacts = binary 946, Module 3 cut the one
+    /// right wire of 8 with <see cref="WireCutters"/> — a wrong wire detonates; Modules 4–6 placeholders),
+    /// deducts 1 minute on wrong submissions, and drives the inspecting
     /// character's bending-down pose and first-person decipher camera.
     /// </summary>
     [DefaultExecutionOrder(-10)]
@@ -21,11 +22,13 @@ namespace Arnafjordur.Characters
         public const string TargetWord = "TØNT";
         public const string Alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZÆØÅÐ";
         public const int ModuleCount = 6;
-        public const int ContactCount = 8;
+        public const int ContactCount = 10;
+        public const int WireCount = 8;
 
+        /// <summary>Module 2 answer: 1110110010, the number 946 in binary (C1 = most significant bit).</summary>
         public static readonly bool[] DefaultTargetContacts =
         {
-            true, false, true, true, false, true, false, false,
+            true, true, true, false, true, true, false, false, true, false,
         };
 
         private struct BoneOverride
@@ -68,6 +71,10 @@ namespace Arnafjordur.Characters
         [SerializeField] private Material ledGreenMaterial;
         [SerializeField] private Material ledAmberMaterial;
 
+        [Header("Module 3: Wires")]
+        [SerializeField, Range(0, WireCount - 1), Tooltip("The one wire that disarms Module 3 (index into Palette.BombWireNames). Any other wire detonates the mine.")]
+        private int correctWireIndex = 2;
+
         [Header("Interaction")]
         [SerializeField] private Vector3 inspectStandOffsetLocal = new Vector3(-1.32f, 0f, 0f);
         [SerializeField] private float interactReach = 2.5f;
@@ -75,6 +82,7 @@ namespace Arnafjordur.Characters
         private readonly char[] _wordLetters = { 'A', 'A', 'A', 'A' };
         private readonly bool[] _contacts = new bool[ContactCount];
         private readonly bool[] _targetContacts = (bool[])DefaultTargetContacts.Clone();
+        private readonly bool[] _wiresCut = new bool[WireCount];
         private readonly List<BoneOverride> _boneOverrides = new List<BoneOverride>(20);
         private readonly Dictionary<CharacterMotor, CharacterBones> _boneCache = new Dictionary<CharacterMotor, CharacterBones>();
 
@@ -102,11 +110,67 @@ namespace Arnafjordur.Characters
         /// <summary>True when Module 1 (4-letter word TØNT) has been deciphered.</summary>
         public bool IsWordSolved { get; private set; }
 
-        /// <summary>True when Module 2 (8 on/off contacts) has been deciphered.</summary>
+        /// <summary>True when Module 2 (10 on/off contacts) has been deciphered.</summary>
         public bool IsContactsSolved { get; private set; }
 
         /// <summary>True once the required decipher modules are solved and the bomb can be deactivated.</summary>
-        public bool CanDeactivate => IsWordSolved && IsContactsSolved && !IsDisarmed && !IsExploded;
+        public bool CanDeactivate => IsWordSolved && IsContactsSolved && IsWiresSolved && !IsDisarmed && !IsExploded;
+
+        /// <summary>Index of the one wire that disarms Module 3.</summary>
+        public int CorrectWireIndex => correctWireIndex;
+
+        /// <summary>True when Module 3's correct wire has been cut.</summary>
+        public bool IsWiresSolved { get; private set; }
+
+        /// <summary>True when wire <paramref name="index"/> (0..7) has been cut.</summary>
+        public bool IsWireCut(int index) => index >= 0 && index < WireCount && _wiresCut[index];
+
+        /// <summary>True when the character bent over the mine is holding <see cref="WireCutters"/>.</summary>
+        public bool InspectorHasWireCutters
+        {
+            get
+            {
+                if (InspectingCharacter == null || !InspectingCharacter.TryGetComponent(out CharacterItemHolder holder)) return false;
+                return holder.HeldItem != null && holder.HeldItem.GetComponent<WireCutters>() != null;
+            }
+        }
+
+        /// <summary>
+        /// Cuts wire <paramref name="index"/> (0..7). Needs wire cutters in hand. The right wire solves Module 3;
+        /// any other wire sets the mine off and the game is lost. Returns true when the wire was actually cut.
+        /// </summary>
+        public bool TryCutWire(int index)
+        {
+            if (IsDisarmed || IsExploded || IsWiresSolved || index < 0 || index >= WireCount || _wiresCut[index])
+            {
+                return false;
+            }
+
+            if (!InspectorHasWireCutters)
+            {
+                LastFeedbackMessage = "YOU NEED WIRE CUTTERS TO CUT A WIRE";
+                LastFeedbackWasPenalty = false;
+                StateChanged?.Invoke();
+                return false;
+            }
+
+            _wiresCut[index] = true;
+            if (index == correctWireIndex)
+            {
+                IsWiresSolved = true;
+                LastFeedbackMessage = "MODULE 3 WIRE CUT — CIRCUIT DEAD!";
+                LastFeedbackWasPenalty = false;
+                PenaltyFlashTimer = 0f;
+                Refresh3DVisuals();
+                StateChanged?.Invoke();
+                return true;
+            }
+
+            TriggerExplosion();
+            LastFeedbackMessage = $"WRONG WIRE ({Core.Palette.BombWireNames[index]})! ATOM BOMB DETONATED!";
+            StateChanged?.Invoke();
+            return true;
+        }
 
         /// <summary>Total number of decipher modules on the sea mine (2 active + 4 placeholders).</summary>
         public int TotalModules => ModuleCount;
@@ -367,19 +431,19 @@ namespace Arnafjordur.Characters
             return false;
         }
 
-        /// <summary>Returns the current state (true = ON) of contact <paramref name="index"/> (0..7).</summary>
+        /// <summary>Returns the current state (true = ON) of contact <paramref name="index"/> (0..9).</summary>
         public bool GetContact(int index)
         {
             return index >= 0 && index < _contacts.Length && _contacts[index];
         }
 
-        /// <summary>Returns the target state (true = ON) of contact <paramref name="index"/> (0..7).</summary>
+        /// <summary>Returns the target state (true = ON) of contact <paramref name="index"/> (0..9).</summary>
         public bool GetTargetContact(int index)
         {
             return index >= 0 && index < _targetContacts.Length && _targetContacts[index];
         }
 
-        /// <summary>Toggles on/off contact <paramref name="index"/> (0..7).</summary>
+        /// <summary>Toggles on/off contact <paramref name="index"/> (0..9).</summary>
         public void ToggleContact(int index)
         {
             if (IsContactsSolved || IsDisarmed || IsExploded || index < 0 || index >= _contacts.Length)
@@ -392,7 +456,7 @@ namespace Arnafjordur.Characters
             StateChanged?.Invoke();
         }
 
-        /// <summary>Sets on/off contact <paramref name="index"/> (0..7) explicitly.</summary>
+        /// <summary>Sets on/off contact <paramref name="index"/> (0..9) explicitly.</summary>
         public void SetContact(int index, bool isOn)
         {
             if (IsContactsSolved || IsDisarmed || IsExploded || index < 0 || index >= _contacts.Length)
@@ -410,7 +474,7 @@ namespace Arnafjordur.Characters
             StateChanged?.Invoke();
         }
 
-        /// <summary>Checks the 8 on/off contacts against the target sequence; deducts 1 minute if wrong.</summary>
+        /// <summary>Checks the 10 on/off contacts against the target sequence; deducts 1 minute if wrong.</summary>
         public bool TrySubmitContacts()
         {
             if (IsDisarmed || IsExploded)
@@ -448,7 +512,7 @@ namespace Arnafjordur.Characters
             {
                 case 0: return IsWordSolved;
                 case 1: return IsContactsSolved;
-                case 2:
+                case 2: return IsWiresSolved;
                 case 3:
                 case 4:
                 case 5: return IsDisarmed;
@@ -481,6 +545,8 @@ namespace Arnafjordur.Characters
             IsExploded = false;
             IsWordSolved = false;
             IsContactsSolved = false;
+            IsWiresSolved = false;
+            Array.Clear(_wiresCut, 0, _wiresCut.Length);
             PenaltyFlashTimer = 0f;
             WordPenaltyFlashTimer = 0f;
             LastFeedbackMessage = "DECIPHER MODULES TO DEACTIVATE";

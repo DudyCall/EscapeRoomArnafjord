@@ -28,5 +28,20 @@ namespace Arnafjordur.Core
         public static readonly Color UiTextParchment  = new Color32(0xF1, 0xEC, 0xE1, 0xFF); // #F1ECE1
         public static readonly Color UiAccentAmber    = LanternAmber;
         public static readonly Color UiConfirmGreen   = new Color32(0x4E, 0x9A, 0x7A, 0xFF); // #4E9A7A
+
+        // Sea mine Module 3: the 8 wire insulation colours, in panel order (left to right)
+        public static readonly Color[] BombWires =
+        {
+            new Color32(0xC8, 0x2A, 0x24, 0xFF), // red
+            new Color32(0x2E, 0x5E, 0xC8, 0xFF), // blue
+            new Color32(0xE8, 0xC2, 0x2C, 0xFF), // yellow
+            new Color32(0x3C, 0x9A, 0x48, 0xFF), // green
+            new Color32(0xEE, 0xEC, 0xE6, 0xFF), // white
+            new Color32(0x22, 0x22, 0x24, 0xFF), // black
+            new Color32(0xE8, 0x7A, 0x22, 0xFF), // orange
+            new Color32(0x86, 0x44, 0xB0, 0xFF), // purple
+        };
+
+        public static readonly string[] BombWireNames = { "RED", "BLUE", "YELLOW", "GREEN", "WHITE", "BLACK", "ORANGE", "PURPLE" };
     }
 }

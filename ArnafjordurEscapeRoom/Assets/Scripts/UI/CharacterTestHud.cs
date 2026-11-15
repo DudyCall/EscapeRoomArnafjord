@@ -350,7 +350,7 @@ namespace Arnafjordur.UI
 
             _statusLabel.text =
                 $"Active: {activeName}  |  View: {viewMode}  |  Companions: {mode}  |  Held: {heldName}{fishSegment}  |  Drunk: {drunkStatus}   —   " +
-                "WASD/Arrows: Move  •  Shift: Run  •  Click: Move  •  Right-Drag/Q-E: Look  •  Scroll: Zoom  •  V: 1st/3rd  •  1-3/Tab: Switch  •  F/R: Follow/Roam  •  U/Space: Use  •  G / Click Item: Drop/Take" +
+                "WASD/Arrows: Move  •  Shift: Run  •  Click: Move  •  Right-Drag/Q-E: Look  •  Scroll: Zoom  •  V: 1st/3rd  •  1-3/Tab: Switch  •  F/R: Follow/Roam  •  U/Space: Use  •  G / Click Item: Drop/Take  •  I: Pockets" +
                 inspectHint;
         }
 

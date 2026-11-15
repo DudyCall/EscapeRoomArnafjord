@@ -26,7 +26,7 @@ Each intro "director" component loads the next scene through `NextSceneName`, wh
 | 2 | `Intro_TunnelExit` | `IntroTunnelExitSceneSetup.cs` | `IntroPathDrive.cs`: drives the car along waypoints while a roadside camera follows |
 | 3 | `Intro_ChurchArrival` | `IntroChurchArrivalSceneSetup.cs` | `IntroPathDrive.cs`: down the switchbacks into the church forecourt |
 | 4 | `Intro_CarExit` | `IntroCarExitSceneSetup.cs` | `IntroCarExit.cs`: lights off, players climb out and stand facing the camera |
-| 5 | `Arnafjordur_Village` | `VillageSceneSetup.cs` (largest file, ~1900 lines; also builds the beach sand, the washed-up `AtomBombSeaMine`, and the `ShoreRocks` out to the boathouse) | the playable village, using `PartyController` and `WalkableArea` |
+| 5 | `Arnafjordur_Village` | `VillageSceneSetup.cs` (largest file, ~1900 lines; also builds the beach sand, the washed-up `AtomBombSeaMine`, the `ShoreRocks` out to the boathouse, 20 pickable `BeachPebbles` and the `BeachWood` driftwood/planks) | the playable village, using `PartyController` and `WalkableArea` |
 | - | `SampleScene` | `SetupPlayableFlatScene.cs` (menu `Arnafjordur/...`) | flat test arena for movement and characters, with `CharacterTestHud` |
 
 These run across all the intro scenes: `IntroMusic.cs` (the car-radio song, which keeps playing between scenes; set up by `IntroMusicSetup.cs`), `BeerDrinker.cs` (seated players sipping beer; set up by `CarBeerSetup.cs`) and `IntroFirstPersonCamera.cs` (V/C first-person cabin view, 1-3/Tab to switch seat).
@@ -40,9 +40,14 @@ These run across all the intro scenes: `IntroMusic.cs` (the car-radio song, whic
 - `Characters/CarTrunk.cs`: opens/closes the Golf's `Tailgate` (T key or click, when the active character is behind the car). Added to the parked car by `VillageSceneSetup`, which also puts a takeable `BeerBox`, `Radio`, and `FishingRod` in the trunk (only pickable while open).
 - `Characters/FishingRod.cs`: telescopic spinning rod stored in the car trunk; expands when picked up and casts a bobber into the fjord or Stórá river (U/Space), detects bites, and reels in fish.
 - `Characters/BeerBottle.cs`: sips left in a beer (5); a dry sip from an empty one makes the character toss it away (added by `CharacterItemHolder` on first sip).
+- `Characters/CharacterPockets.cs`: each friend's own hidden items (Andrias: `Cigarettes` + `Lighter`), cycled into the hand with I; built by `VillageSceneSetup.BuildPocketItems`.
+- `Characters/CigarettePack.cs`, `Characters/Cigarette.cs`, `Characters/CharacterSmoker.cs`: using `Cigarettes` opens the pack lid, reaches in with the left hand to put a cigarette in the mouth, and using `Lighter` raises it to light the cigarette.
+- `Characters/Lighter.cs`: U/Space flicks a flame for a few seconds (`IsLit`).
+- `Characters/WireCutters.cs`: marker that makes a held `PickupItem` count as wire cutters for the sea mine's Module 3.
+- `Characters/Firewood.cs`: marker on the beach driftwood and planks (burn time) for a future fire.
 - `Characters/BeerCrate.cs`: on the beer box; U/Space with an empty hand right by it hands out a copy of the players' bottle (12 in the box).
 - `Characters/RadioPlayer.cs`: the carryable radio; U/Space while held plays the next song or stops. Playlist = every clip in `Assets/Audio/Radio/` (rebuild the village after adding songs).
-- `Characters/SeaMineBomb.cs`: the washed-up Atom Bomb Sea Mine main objective on the beach — 1-hour countdown, `-60s` wrong-attempt penalty, bend-down inspection pose + first-person decipher entry (6 module slots: Module 1 word `TØNT`, Module 2 8 on/off contacts, Modules 3–6 placeholders).
+- `Characters/SeaMineBomb.cs`: the washed-up Atom Bomb Sea Mine main objective on the beach — 1-hour countdown, `-60s` wrong-attempt penalty, bend-down inspection pose + first-person decipher entry (6 module slots: Module 1 word `TØNT`, Module 2 10 on/off contacts = `1110110010` (946 in binary), Module 3 cut the one right wire of 8 (needs `WireCutters` in hand; a wrong wire detonates = game lost; right wire set by `correctWireIndex`, colours in `Palette.BombWires`), Modules 4–6 placeholders).
 - `Characters/ThirdPersonCameraRig.cs`: orbit and first-person camera. `SessionFirstPersonPreference` carries over between scenes.
 - `Characters/WalkableArea.cs`: allowed ground (corridors and zones). The motor slides along its edges.
 - `Core/Palette.cs`: **single source of truth for colours.** Use it instead of hard-coded colours (see `Docs/ArtBible.md`).

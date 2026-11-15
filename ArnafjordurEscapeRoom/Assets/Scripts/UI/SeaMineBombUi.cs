@@ -50,7 +50,7 @@ namespace Arnafjordur.UI
         private Image _submitWordBg;
         private Text _submitWordLabel;
 
-        // Module 2: 8 on/off contacts
+        // Module 2: 10 on/off contacts
         private Image _contactsStatusBg;
         private Text _contactsStatusLabel;
         private readonly Image[] _contactBgs = new Image[SeaMineBomb.ContactCount];
@@ -59,9 +59,15 @@ namespace Arnafjordur.UI
         private Image _submitContactsBg;
         private Text _submitContactsLabel;
 
-        // Modules 3-6 placeholders
-        private readonly Image[] _placeholderStatusBgs = new Image[4];
-        private readonly Text[] _placeholderStatusLabels = new Text[4];
+        // Module 3: wires
+        private Image _wiresStatusBg;
+        private Text _wiresStatusLabel;
+        private readonly UiWire[] _wires = new UiWire[SeaMineBomb.WireCount];
+        private Text _wiresHint;
+
+        // Modules 4-6 placeholders
+        private readonly Image[] _placeholderStatusBgs = new Image[3];
+        private readonly Text[] _placeholderStatusLabels = new Text[3];
 
         // Footer actions
         private Button _deactivateButton;
@@ -428,7 +434,7 @@ namespace Arnafjordur.UI
             RectTransform gridRt = gridHost.GetComponent<RectTransform>();
             BuildWordModuleBay(gridRt);
             BuildContactsModuleBay(gridRt);
-            BuildPlaceholderModuleBay(gridRt, 2, "3. DECIPHER III", "Pending Clue — Slot 3 of 6\n(Future cipher / lock mechanism)");
+            BuildWiresModuleBay(gridRt);
             BuildPlaceholderModuleBay(gridRt, 3, "4. DECIPHER IV", "Pending Clue — Slot 4 of 6\n(Future cipher / lock mechanism)");
             BuildPlaceholderModuleBay(gridRt, 4, "5. DECIPHER V", "Pending Clue — Slot 5 of 6\n(Future cipher / lock mechanism)");
             BuildPlaceholderModuleBay(gridRt, 5, "6. DECIPHER VI", "Pending Clue — Slot 6 of 6\n(Future cipher / lock mechanism)");
@@ -526,21 +532,21 @@ namespace Arnafjordur.UI
 
         private void BuildContactsModuleBay(RectTransform gridParent)
         {
-            GameObject bay = CreateModuleBayFrame(gridParent, "Module_2_Contacts", "2. 8 ON/OFF CONTACTS", out _contactsStatusBg, out _contactsStatusLabel);
+            GameObject bay = CreateModuleBayFrame(gridParent, "Module_2_Contacts", "2. 10 ON/OFF CONTACTS", out _contactsStatusBg, out _contactsStatusLabel);
             RectTransform bayRt = bay.GetComponent<RectTransform>();
 
             for (int i = 0; i < SeaMineBomb.ContactCount; i++)
             {
                 int contactIdx = i;
-                float x = -161f + i * 46f;
+                float x = -171f + i * 38f;
                 Button swBtn = CreateButton($"Contact_{i + 1}", bayRt, $"C{i + 1}\nOFF", out _contactBgs[i], out _contactLabels[i], 14);
                 _contactLabels[i].fontStyle = FontStyle.Bold;
-                SetRect(swBtn.GetComponent<RectTransform>(), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(x, 22f), new Vector2(42f, 92f));
+                SetRect(swBtn.GetComponent<RectTransform>(), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(x, 22f), new Vector2(34f, 92f));
                 swBtn.onClick.AddListener(() => bomb?.ToggleContact(contactIdx));
             }
 
             Text hint = CreateText("ContactsHint", bayRt, 13, TextAnchor.MiddleCenter, Palette.SeaFoam, FontStyle.Normal);
-            hint.text = "Click switches to toggle ON / OFF\nTest pattern: ON OFF ON ON OFF ON OFF OFF";
+            hint.text = "Click switches to toggle ON / OFF\nC1 is on the left";
             SetRect(hint.rectTransform, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0f, -52f), new Vector2(380f, 38f));
 
             _submitContactsButton = CreateButton("Btn_SubmitContacts", bayRt, "CHECK CONTACTS (-1m if wrong)", out _submitContactsBg, out _submitContactsLabel, 15);
@@ -549,9 +555,70 @@ namespace Arnafjordur.UI
             _submitContactsButton.onClick.AddListener(() => bomb?.TrySubmitContacts());
         }
 
+        /// <summary>Module 3: eight coloured wires running top to bottom; click one while holding wire cutters to cut it.</summary>
+        private void BuildWiresModuleBay(RectTransform gridParent)
+        {
+            GameObject bay = CreateModuleBayFrame(gridParent, "Module_3_Wires", "3. CUT THE RIGHT WIRE", out _wiresStatusBg, out _wiresStatusLabel);
+            RectTransform bayRt = bay.GetComponent<RectTransform>();
+
+            // recessed backing plate behind the wiring
+            GameObject plate = CreatePanel("WirePlate", bayRt, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0f, 16f), new Vector2(384f, 138f), Color.Lerp(Palette.DeepFjordSlate, Color.black, 0.35f));
+            plate.GetComponent<Image>().raycastTarget = false;
+
+            const float topY = 72f, bottomY = -40f;
+            Color brass = Color.Lerp(Palette.LanternAmber, Palette.HarbourConcrete, 0.35f);
+            Color brassDark = Color.Lerp(brass, Color.black, 0.45f);
+
+            for (int i = 0; i < SeaMineBomb.WireCount; i++)
+            {
+                int wireIdx = i;
+                float x = -161f + i * 46f;
+
+                // the wire itself: a wide hit area so it's easy to click, drawn as a shaded curved cable
+                var wireGo = new GameObject($"Wire_{i + 1}", typeof(RectTransform), typeof(CanvasRenderer), typeof(UiWire));
+                var wireRt = wireGo.GetComponent<RectTransform>();
+                wireRt.SetParent(bayRt, false);
+                SetRect(wireRt, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(x, (topY + bottomY) * 0.5f), new Vector2(40f, topY - bottomY));
+                _wires[i] = wireGo.GetComponent<UiWire>();
+                _wires[i].Configure(Palette.BombWires[i], 6f + (i % 3) * 2f, i * 1.7f);
+                Button btn = wireGo.AddComponent<Button>();
+                btn.targetGraphic = _wires[i];
+                ColorBlock colors = btn.colors;
+                colors.normalColor = new Color(0.88f, 0.88f, 0.88f, 1f);
+                colors.highlightedColor = Color.white;
+                colors.pressedColor = new Color(0.7f, 0.7f, 0.7f, 1f);
+                colors.disabledColor = new Color(0.88f, 0.88f, 0.88f, 1f);
+                btn.colors = colors;
+                btn.onClick.AddListener(() => bomb?.TryCutWire(wireIdx));
+            }
+
+            // terminal strips with a brass screw clamping each wire end (drawn over the wire ends)
+            foreach (float y in new[] { topY, bottomY })
+            {
+                GameObject block = CreatePanel("Terminal", bayRt, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0f, y), new Vector2(376f, 18f), Palette.WetBasalt);
+                block.GetComponent<Image>().raycastTarget = false;
+                GameObject lip = CreatePanel("TerminalLip", block.GetComponent<RectTransform>(), new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), Vector2.zero, new Vector2(376f, 3f), Color.Lerp(Palette.WetBasalt, Color.white, 0.25f));
+                lip.GetComponent<Image>().raycastTarget = false;
+                for (int i = 0; i < SeaMineBomb.WireCount; i++)
+                {
+                    float x = -161f + i * 46f;
+                    GameObject screw = CreatePanel("Screw", bayRt, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(x, y), new Vector2(13f, 13f), brassDark);
+                    screw.GetComponent<Image>().raycastTarget = false;
+                    GameObject face = CreatePanel("Face", screw.GetComponent<RectTransform>(), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(-0.5f, 0.5f), new Vector2(10f, 10f), brass);
+                    face.GetComponent<Image>().raycastTarget = false;
+                    GameObject slot = CreatePanel("Slot", face.GetComponent<RectTransform>(), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(8f, 2f), brassDark);
+                    slot.GetComponent<Image>().raycastTarget = false;
+                    slot.transform.localRotation = Quaternion.Euler(0f, 0f, 35f + i * 23f);
+                }
+            }
+
+            _wiresHint = CreateText("WiresHint", bayRt, 13, TextAnchor.MiddleCenter, Palette.SeaFoam, FontStyle.Normal);
+            SetRect(_wiresHint.rectTransform, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 14f), new Vector2(380f, 56f));
+        }
+
         private void BuildPlaceholderModuleBay(RectTransform gridParent, int moduleIndex, string titleText, string bodyText)
         {
-            int idx = moduleIndex - 2;
+            int idx = moduleIndex - 3;
             GameObject bay = CreateModuleBayFrame(
                 gridParent,
                 $"Module_{moduleIndex + 1}_Placeholder",
@@ -718,7 +785,25 @@ namespace Arnafjordur.UI
             _submitContactsLabel.color = Palette.DeepFjordSlate;
             _submitContactsLabel.text = bomb.IsContactsSolved ? "CONTACTS LOCKED" : "CHECK CONTACTS (-1m if wrong)";
 
-            // Modules 3-6 placeholders
+            // Module 3
+            bool hasCutters = bomb.InspectorHasWireCutters;
+            _wiresStatusBg.color = bomb.IsWiresSolved ? Palette.UiConfirmGreen : (bomb.IsExploded ? Palette.BoathouseRust : Palette.UiAccentAmber);
+            _wiresStatusLabel.color = bomb.IsExploded && !bomb.IsWiresSolved ? Palette.UiTextParchment : Palette.DeepFjordSlate;
+            _wiresStatusLabel.text = bomb.IsWiresSolved ? "SOLVED" : (bomb.IsExploded ? "DETONATED" : "ARMED");
+            for (int i = 0; i < SeaMineBomb.WireCount; i++)
+            {
+                bool cut = bomb.IsWireCut(i);
+                _wires[i].SetCut(cut);
+            }
+
+            _wiresHint.text = bomb.IsWiresSolved
+                ? "Circuit dead. Module 3 is safe."
+                : (hasCutters
+                    ? "Click a wire to cut it.\nOnly ONE is right — a wrong wire detonates the mine!"
+                    : "Hold WIRE CUTTERS to cut a wire.\nOnly ONE is right — a wrong wire detonates the mine!");
+            _wiresHint.color = hasCutters || bomb.IsWiresSolved ? Palette.SeaFoam : Palette.UiAccentAmber;
+
+            // Modules 4-6 placeholders
             for (int i = 0; i < _placeholderStatusBgs.Length; i++)
             {
                 _placeholderStatusBgs[i].color = bomb.IsDisarmed ? Palette.UiConfirmGreen : Palette.WetBasalt;
