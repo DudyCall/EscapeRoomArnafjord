@@ -10,7 +10,7 @@ namespace Arnafjordur.Characters
     /// <summary>
     /// Washed-up atomic sea mine on the Árnafjørður beach: runs the 1-hour countdown timer,
     /// holds the 6 decipher modules (Module 1 word "TØNT", Module 2 10 on/off contacts = binary 946, Module 3 cut the one
-    /// right wire of 8 with <see cref="WireCutters"/> — a wrong wire detonates; Modules 4–6 placeholders),
+    /// right wire of 8 with <see cref="WireCutters"/> — a wrong wire detonates; Module 4 three right <see cref="BombKey"/>s turned in 3 keyholes; Modules 5–6 placeholders),
     /// deducts 1 minute on wrong submissions, and drives the inspecting
     /// character's bending-down pose and first-person decipher camera.
     /// </summary>
@@ -24,6 +24,8 @@ namespace Arnafjordur.Characters
         public const int ModuleCount = 6;
         public const int ContactCount = 10;
         public const int WireCount = 8;
+        public const int KeySlotCount = 3;
+        public const float KeyRejectFlashSeconds = 1.2f;
 
         /// <summary>Module 2 answer: 1110110010, the number 946 in binary (C1 = most significant bit).</summary>
         public static readonly bool[] DefaultTargetContacts =
@@ -70,10 +72,18 @@ namespace Arnafjordur.Characters
         [SerializeField] private Material ledRedMaterial;
         [SerializeField] private Material ledGreenMaterial;
         [SerializeField] private Material ledAmberMaterial;
+        [SerializeField, Tooltip("Module 4 keyhole rims on the 3D panel: dark until a key turns (green) or is refused (red flash).")]
+        private Renderer[] keyholeLights = System.Array.Empty<Renderer>();
+        [SerializeField] private Material keyholeOffMaterial;
+        [SerializeField, Tooltip("Turned-key pieces shown in each 3D keyhole once a right key is in.")]
+        private GameObject[] keyholeKeys = System.Array.Empty<GameObject>();
+
+        /// <summary>Module 3 answer: cut 3 wires in order — White (4), Blue (1), Red (0).</summary>
+        public static readonly int[] DefaultWireSequence = { 4, 1, 0 };
 
         [Header("Module 3: Wires")]
-        [SerializeField, Range(0, WireCount - 1), Tooltip("The one wire that disarms Module 3 (index into Palette.BombWireNames). Any other wire detonates the mine.")]
-        private int correctWireIndex = 2;
+        [SerializeField, Tooltip("Ordered wire indices (into Palette.BombWireNames) that disarm Module 3. Any wrong wire or order detonates the mine.")]
+        private int[] correctWireSequence = { 4, 1, 0 };
 
         [Header("Interaction")]
         [SerializeField] private Vector3 inspectStandOffsetLocal = new Vector3(-1.32f, 0f, 0f);
@@ -83,6 +93,7 @@ namespace Arnafjordur.Characters
         private readonly bool[] _contacts = new bool[ContactCount];
         private readonly bool[] _targetContacts = (bool[])DefaultTargetContacts.Clone();
         private readonly bool[] _wiresCut = new bool[WireCount];
+        private readonly List<PickupItem> _insertedKeys = new List<PickupItem>(KeySlotCount);
         private readonly List<BoneOverride> _boneOverrides = new List<BoneOverride>(20);
         private readonly Dictionary<CharacterMotor, CharacterBones> _boneCache = new Dictionary<CharacterMotor, CharacterBones>();
 
@@ -114,12 +125,94 @@ namespace Arnafjordur.Characters
         public bool IsContactsSolved { get; private set; }
 
         /// <summary>True once the required decipher modules are solved and the bomb can be deactivated.</summary>
-        public bool CanDeactivate => IsWordSolved && IsContactsSolved && IsWiresSolved && !IsDisarmed && !IsExploded;
+        public bool CanDeactivate => IsWordSolved && IsContactsSolved && IsWiresSolved && IsKeysSolved && !IsDisarmed && !IsExploded;
 
-        /// <summary>Index of the one wire that disarms Module 3.</summary>
-        public int CorrectWireIndex => correctWireIndex;
+        /// <summary>True once all three Module 4 keyholes have a right key turned in them.</summary>
+        public bool IsKeysSolved => _insertedKeys.Count >= KeySlotCount;
 
-        /// <summary>True when Module 3's correct wire has been cut.</summary>
+        /// <summary>How many keyholes (from slot 1) already have a right key turned.</summary>
+        public int KeysTurned => _insertedKeys.Count;
+
+        /// <summary>Seconds left of the red flash on <see cref="KeyRejectSlot"/> after a key that won't turn.</summary>
+        public float KeyRejectFlashTimer { get; private set; }
+
+        /// <summary>The keyhole (0..2) a refused key was tried in.</summary>
+        public int KeyRejectSlot { get; private set; } = -1;
+
+        /// <summary>True when the character bent over the mine is holding something with <see cref="BombKey"/>.</summary>
+        public bool InspectorHoldsKey => InspectorHeldItem != null && InspectorHeldItem.GetComponent<BombKey>() != null;
+
+        private PickupItem InspectorHeldItem =>
+            InspectingCharacter != null && InspectingCharacter.TryGetComponent(out CharacterItemHolder holder) ? holder.HeldItem : null;
+
+        /// <summary>
+        /// Puts the held key into the next empty keyhole (slot 1, then 2, then 3). A right key turns, stays in
+        /// the bomb and lights the slot green; a wrong one won't turn, flashes the slot red and stays in the hand.
+        /// Returns true when a key turned.
+        /// </summary>
+        public bool TryUseKey()
+        {
+            if (IsDisarmed || IsExploded || IsKeysSolved)
+            {
+                return false;
+            }
+
+            PickupItem held = InspectorHeldItem;
+            BombKey key = held != null ? held.GetComponent<BombKey>() : null;
+            if (key == null)
+            {
+                LastFeedbackMessage = "HOLD A KEY TO USE THE KEYHOLES";
+                LastFeedbackWasPenalty = false;
+                StateChanged?.Invoke();
+                return false;
+            }
+
+            int slot = _insertedKeys.Count;
+            if (!key.FitsBomb)
+            {
+                KeyRejectSlot = slot;
+                KeyRejectFlashTimer = KeyRejectFlashSeconds;
+                LastFeedbackMessage = $"THAT KEY WON'T TURN IN SLOT {slot + 1}";
+                LastFeedbackWasPenalty = false;
+                Refresh3DVisuals();
+                StateChanged?.Invoke();
+                return false;
+            }
+
+            // the key stays in the lock: take it out of the hand and keep it hidden on the bomb
+            InspectingCharacter.GetComponent<CharacterItemHolder>().ReleaseHeldItem();
+            held.transform.SetParent(controlPanelRoot != null ? controlPanelRoot : transform, false);
+            held.gameObject.SetActive(false);
+            _insertedKeys.Add(held);
+            KeyRejectFlashTimer = 0f;
+            KeyRejectSlot = -1;
+            LastFeedbackMessage = IsKeysSolved ? "MODULE 4 — ALL THREE KEYS TURNED!" : $"KEY TURNED IN SLOT {slot + 1}";
+            LastFeedbackWasPenalty = false;
+            Refresh3DVisuals();
+            StateChanged?.Invoke();
+            return true;
+        }
+
+        /// <summary>Builder hook for the Module 4 keyholes on the 3D control panel.</summary>
+        public void ConfigureKeyholes(Renderer[] lights, GameObject[] turnedKeys, Material offMat)
+        {
+            keyholeLights = lights ?? System.Array.Empty<Renderer>();
+            keyholeKeys = turnedKeys ?? System.Array.Empty<GameObject>();
+            keyholeOffMaterial = offMat;
+            Refresh3DVisuals();
+        }
+
+        /// <summary>Ordered wire indices (into <see cref="Core.Palette.BombWireNames"/>) that disarm Module 3.</summary>
+        public IReadOnlyList<int> CorrectWireSequence =>
+            correctWireSequence != null && correctWireSequence.Length > 0 ? correctWireSequence : DefaultWireSequence;
+
+        /// <summary>How many wires in the required sequence have been cut so far.</summary>
+        public int WiresCutInSequence { get; private set; }
+
+        /// <summary>Next wire index that must be cut, or -1 if already solved.</summary>
+        public int NextRequiredWireIndex => WiresCutInSequence < CorrectWireSequence.Count ? CorrectWireSequence[WiresCutInSequence] : -1;
+
+        /// <summary>True when Module 3's wire sequence has been cut in order.</summary>
         public bool IsWiresSolved { get; private set; }
 
         /// <summary>True when wire <paramref name="index"/> (0..7) has been cut.</summary>
@@ -155,10 +248,19 @@ namespace Arnafjordur.Characters
             }
 
             _wiresCut[index] = true;
-            if (index == correctWireIndex)
+            if (index == NextRequiredWireIndex)
             {
-                IsWiresSolved = true;
-                LastFeedbackMessage = "MODULE 3 WIRE CUT — CIRCUIT DEAD!";
+                WiresCutInSequence++;
+                if (WiresCutInSequence >= CorrectWireSequence.Count)
+                {
+                    IsWiresSolved = true;
+                    LastFeedbackMessage = "MODULE 3 WIRES CUT — CIRCUIT DEAD!";
+                }
+                else
+                {
+                    LastFeedbackMessage = $"WIRE {WiresCutInSequence}/{CorrectWireSequence.Count} ({Core.Palette.BombWireNames[index]}) CUT!";
+                }
+
                 LastFeedbackWasPenalty = false;
                 PenaltyFlashTimer = 0f;
                 Refresh3DVisuals();
@@ -318,6 +420,17 @@ namespace Arnafjordur.Characters
             if (WordPenaltyFlashTimer > 0f)
             {
                 WordPenaltyFlashTimer = Mathf.Max(0f, WordPenaltyFlashTimer - dt);
+            }
+
+            if (KeyRejectFlashTimer > 0f)
+            {
+                KeyRejectFlashTimer = Mathf.Max(0f, KeyRejectFlashTimer - dt);
+                if (KeyRejectFlashTimer <= 0f)
+                {
+                    KeyRejectSlot = -1;     // the red goes out again
+                    Refresh3DVisuals();
+                    StateChanged?.Invoke();
+                }
             }
 
             if (!IsDisarmed && !IsExploded)
@@ -513,7 +626,7 @@ namespace Arnafjordur.Characters
                 case 0: return IsWordSolved;
                 case 1: return IsContactsSolved;
                 case 2: return IsWiresSolved;
-                case 3:
+                case 3: return IsKeysSolved;
                 case 4:
                 case 5: return IsDisarmed;
                 default: return false;
@@ -546,6 +659,20 @@ namespace Arnafjordur.Characters
             IsWordSolved = false;
             IsContactsSolved = false;
             IsWiresSolved = false;
+            WiresCutInSequence = 0;
+            // test reset: hand the turned keys back by dropping them beside the mine
+            for (int k = 0; k < _insertedKeys.Count; k++)
+            {
+                PickupItem key = _insertedKeys[k];
+                if (key == null) continue;
+                key.transform.SetParent(transform.parent, true);
+                key.transform.position = GetInspectStandPoint() + transform.right * (0.25f * (k - 1)) + Vector3.up * 0.05f;
+                key.gameObject.SetActive(true);
+            }
+
+            _insertedKeys.Clear();
+            KeyRejectFlashTimer = 0f;
+            KeyRejectSlot = -1;
             Array.Clear(_wiresCut, 0, _wiresCut.Length);
             PenaltyFlashTimer = 0f;
             WordPenaltyFlashTimer = 0f;
@@ -885,11 +1012,25 @@ namespace Arnafjordur.Characters
                 bool solved = IsModuleSolved(i);
                 Material targetMat = solved
                     ? ledGreenMaterial
-                    : (i < 2 ? ledRedMaterial : ledAmberMaterial);
+                    : (i < 4 ? ledRedMaterial : ledAmberMaterial);
                 if (targetMat != null)
                 {
                     r.sharedMaterial = targetMat;
                 }
+            }
+
+            for (int i = 0; i < keyholeLights.Length; i++)
+            {
+                Renderer r = keyholeLights[i];
+                if (r == null) continue;
+                Material m = i < _insertedKeys.Count ? ledGreenMaterial
+                    : (i == KeyRejectSlot && KeyRejectFlashTimer > 0f ? ledRedMaterial : keyholeOffMaterial);
+                if (m != null) r.sharedMaterial = m;
+            }
+
+            for (int i = 0; i < keyholeKeys.Length; i++)
+            {
+                if (keyholeKeys[i] != null) keyholeKeys[i].SetActive(i < _insertedKeys.Count);
             }
 
             UpdateBeaconBlink();

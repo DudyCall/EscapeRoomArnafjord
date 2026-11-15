@@ -5,7 +5,8 @@ T-junction with the left road crossing Stórá into Hvannasundstunnilin (toward 
 
 Built from real OpenStreetMap + Mapzen Terrarium DEM data (arnafjordur_geo.npz, arnafjordur_osm.json).
 
-Run:  blender --background --python build_tunnel_exit.py -- <unity Assets/Environment/TunnelExit dir> [--no-render]
+Run:  blender --background --python build_tunnel_exit.py -- <unity Assets/Environment/TunnelExit dir> [--no-render] [--houses-only]
+      (--houses-only rewrites just VillageHouses.json: door + window spots of the detailed village houses)
 
 All geometry is authored in Unity-style coordinates, portal-local:
   x = right (SSE), y = up, z = out of the tunnel (ENE). The portal mouth is the origin (road centre, z = 0).
@@ -23,6 +24,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ARGV = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
 OUT = os.path.abspath(next((a for a in ARGV if not a.startswith("--")), os.path.join(HERE, "out_exit")))
 DO_RENDER = "--no-render" not in ARGV
+# --houses-only: rebuild the scene in memory but only write VillageHouses.json (no .blend, no FBX, no renders)
+HOUSES_ONLY = "--houses-only" in ARGV
 TEX = os.path.join(OUT, "Textures")
 os.makedirs(TEX, exist_ok=True)
 
@@ -1173,6 +1176,11 @@ def add_box(mb, pts_8, mat, cen):
     mb.add(pts_8, [[0, 1, 5, 4], [1, 2, 6, 5], [2, 3, 7, 6], [3, 0, 4, 7], [4, 5, 6, 7]], mat, out_w)
 
 
+# Detailed houses with their entrance doors and wall windows, written to VillageHouses.json so Unity can make
+# doors knockable and build interiors behind the right walls (world = portal-local Unity coordinates).
+HOUSE_RECORDS = []
+
+
 def house(cx, cz, yaw, w, d, h, roof_h, wall, roof, windows=True, is_church=False, b_idx=0, kind="house", trim_override=None, plinth_override=None):
     # Ensure corners are grounded cleanly on slopes
     c, s = math.cos(yaw), math.sin(yaw)
@@ -1490,6 +1498,25 @@ def house(cx, cz, yaw, w, d, h, roof_h, wall, roof, windows=True, is_church=Fals
                                 gmat, lambda q, wn=wn: wn, uv_scale=0.5)
         return True
 
+    record = {
+        "index": b_idx, "kind": kind, "wall": wall, "door": door_mat,
+        "x": round(cx, 3), "y": round(y0, 3), "z": round(cz, 3), "yaw": round(yaw, 5),
+        "w": round(w, 3), "d": round(d, 3), "h": round(h, 3), "roofH": round(roof_h, 3),
+        "plinthH": round(plinth_h, 3), "groundMin": round(y_min, 3), "groundMax": round(y_max, 3),
+        "doors": [], "windows": [],
+    }
+    HOUSE_RECORDS.append(record)
+
+    def record_opening(lst, wdef, u_c, y_bottom, width, height):
+        _, ox, oz, tx, tz, nx, nz, _, _ = wdef
+        px, py, pz = PL(ox + u_c * tx, y_bottom, oz + u_c * tz)
+        lst.append({
+            "wall": wdef[0], "u": round(u_c, 3),
+            "x": round(px, 3), "y": round(py, 3), "z": round(pz, 3),
+            "nx": round(nx * c + nz * s, 5), "nz": round(-nx * s + nz * c, 5),
+            "width": round(width, 3), "height": round(height, 3),
+        })
+
     # Wall definitions: (key, ox, oz, tx, tz, nx, nz, span, clear)
     walls = [
         ("zp", 0.0, d * 0.5, 1.0, 0.0, 0.0, 1.0, w, clear_zp),
@@ -1517,6 +1544,7 @@ def house(cx, cz, yaw, w, d, h, roof_h, wall, roof, windows=True, is_church=Fals
         WL = lambda u, y, n: PL(ox + u * tx + n * nx, y, oz + u * tz + n * nz)
         wn = (nx * c + nz * s, 0.0, -nx * s + nz * c)
         sc = 0.55 if shallow else 1.0
+        record_opening(record["windows"], wdef, u_c, wy0, ww, wh)
         # Glass pane at +0.022m (no z-fighting with wall at 0)
         n_glass = 0.020 * sc + 0.008
         add_quad_uv(village, WL(u_c - ww * 0.5, wy0, n_glass), WL(u_c + ww * 0.5, wy0, n_glass),
@@ -1537,6 +1565,7 @@ def house(cx, cz, yaw, w, d, h, roof_h, wall, roof, windows=True, is_church=Fals
         dw = min(0.92, span * 0.30)
         dh = min(1.94, max(1.62, h - plinth_h - 0.16))
         sc = 0.65 if shallow else 1.0
+        record_opening(record["doors"], wdef, u_c, plinth_h, dw, dh)
         # Door panel + outer casing + lever handle
         add_wall_box(wdef, u_c - dw * 0.5, u_c + dw * 0.5, plinth_h, plinth_h + dh, -0.005, 0.030, door_mat)
         add_wall_box(wdef, u_c - dw * 0.5 - 0.07, u_c - dw * 0.5 + 0.01, plinth_h, plinth_h + dh, -0.01, 0.052 * sc, trim_mat)
@@ -1845,6 +1874,13 @@ objs = [
     water.to_object("Exit_Water", 60),
     village.to_object("Exit_Village", 30),
 ]
+
+with open(os.path.join(OUT, "VillageHouses.json"), "w", encoding="utf-8") as fh:
+    json.dump({"houses": HOUSE_RECORDS}, fh, indent=1)
+print("VillageHouses.json:", len(HOUSE_RECORDS), "houses,", sum(len(r["doors"]) for r in HOUSE_RECORDS), "doors,",
+      "village faces:", len(village.f))
+if HOUSES_ONLY:
+    sys.exit(0)
 
 with open(os.path.join(OUT, "TunnelExitPath.json"), "w", encoding="utf-8") as fh:
     json.dump({"points": [{"x": round(p[0], 3), "y": round(p[1], 3), "z": round(p[2], 3)} for p in PATH]}, fh)

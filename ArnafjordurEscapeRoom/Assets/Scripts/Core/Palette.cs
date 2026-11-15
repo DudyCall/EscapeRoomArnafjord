@@ -23,6 +23,21 @@ namespace Arnafjordur.Core
         public static readonly Color SunbreakKey      = new Color32(0xFF, 0xE6, 0xC4, 0xFF); // #FFE6C4
         public static readonly Color LanternAmber     = new Color32(0xE3, 0x9D, 0x54, 0xFF); // #E39D54
 
+        // House interiors (the teal house's rooms): painted panel walls, pine floors, simple Nordic furniture
+        public static readonly Color InteriorPlaster      = new Color32(0xE9, 0xE4, 0xD8, 0xFF); // #E9E4D8
+        public static readonly Color InteriorTrim         = new Color32(0xF5, 0xF3, 0xEE, 0xFF); // #F5F3EE
+        public static readonly Color InteriorKitchenWall  = new Color32(0xE6, 0xD9, 0xAE, 0xFF); // #E6D9AE
+        public static readonly Color InteriorLivingWall   = new Color32(0xC4, 0xCC, 0xBA, 0xFF); // #C4CCBA
+        public static readonly Color InteriorBedroomWall  = new Color32(0xA7, 0xB8, 0xC6, 0xFF); // #A7B8C6
+        public static readonly Color InteriorPineFloor    = new Color32(0xB0, 0x86, 0x5A, 0xFF); // #B0865A
+        public static readonly Color InteriorOak          = new Color32(0x6E, 0x4E, 0x34, 0xFF); // #6E4E34
+        public static readonly Color InteriorBirch        = new Color32(0xD6, 0xBF, 0x96, 0xFF); // #D6BF96
+        public static readonly Color InteriorWool         = new Color32(0x56, 0x6A, 0x79, 0xFF); // #566A79
+        public static readonly Color InteriorLinen        = new Color32(0xEE, 0xE9, 0xE0, 0xFF); // #EEE9E0
+        public static readonly Color InteriorSteel        = new Color32(0xB4, 0xB9, 0xBD, 0xFF); // #B4B9BD
+        public static readonly Color InteriorCeramic      = new Color32(0xF6, 0xF6, 0xF3, 0xFF); // #F6F6F3
+        public static readonly Color InteriorLampGlow     = new Color32(0xFF, 0xD7, 0xA0, 0xFF); // #FFD7A0
+
         // UI surfaces and readable contrast accents
         public static readonly Color UiPanelSlate     = new Color32(0x16, 0x20, 0x29, 0xEE); // #162029
         public static readonly Color UiTextParchment  = new Color32(0xF1, 0xEC, 0xE1, 0xFF); // #F1ECE1

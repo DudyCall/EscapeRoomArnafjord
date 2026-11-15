@@ -26,7 +26,7 @@ Each intro "director" component loads the next scene through `NextSceneName`, wh
 | 2 | `Intro_TunnelExit` | `IntroTunnelExitSceneSetup.cs` | `IntroPathDrive.cs`: drives the car along waypoints while a roadside camera follows |
 | 3 | `Intro_ChurchArrival` | `IntroChurchArrivalSceneSetup.cs` | `IntroPathDrive.cs`: down the switchbacks into the church forecourt |
 | 4 | `Intro_CarExit` | `IntroCarExitSceneSetup.cs` | `IntroCarExit.cs`: lights off, players climb out and stand facing the camera |
-| 5 | `Arnafjordur_Village` | `VillageSceneSetup.cs` (largest file, ~1900 lines; also builds the beach sand, the washed-up `AtomBombSeaMine`, the `ShoreRocks` out to the boathouse, 20 pickable `BeachPebbles` and the `BeachWood` driftwood/planks) | the playable village, using `PartyController` and `WalkableArea` |
+| 5 | `Arnafjordur_Village` | `VillageSceneSetup.cs` (largest file, ~1900 lines; also builds the beach sand, the washed-up `AtomBombSeaMine`, the `ShoreRocks` out to the boathouse, 20 pickable `BeachPebbles` and the `BeachWood` driftwood/planks; calls `VillageHousesSetup` for knockable doors and the teal house interior) | the playable village, using `PartyController` and `WalkableArea` |
 | - | `SampleScene` | `SetupPlayableFlatScene.cs` (menu `Arnafjordur/...`) | flat test arena for movement and characters, with `CharacterTestHud` |
 
 These run across all the intro scenes: `IntroMusic.cs` (the car-radio song, which keeps playing between scenes; set up by `IntroMusicSetup.cs`), `BeerDrinker.cs` (seated players sipping beer; set up by `CarBeerSetup.cs`) and `IntroFirstPersonCamera.cs` (V/C first-person cabin view, 1-3/Tab to switch seat).
@@ -43,22 +43,27 @@ These run across all the intro scenes: `IntroMusic.cs` (the car-radio song, whic
 - `Characters/CharacterPockets.cs`: each friend's own hidden items (Andrias: `Cigarettes` + `Lighter`), cycled into the hand with I; built by `VillageSceneSetup.BuildPocketItems`.
 - `Characters/CigarettePack.cs`, `Characters/Cigarette.cs`, `Characters/CharacterSmoker.cs`: using `Cigarettes` opens the pack lid, reaches in with the left hand to put a cigarette in the mouth, and using `Lighter` raises it to light the cigarette.
 - `Characters/Lighter.cs`: U/Space flicks a flame for a few seconds (`IsLit`).
+- `Characters/BombKey.cs`: marks a `PickupItem` as a key for the sea mine's Module 4 (`FitsBomb` false = decoy).
 - `Characters/WireCutters.cs`: marker that makes a held `PickupItem` count as wire cutters for the sea mine's Module 3.
 - `Characters/Firewood.cs`: marker on the beach driftwood and planks (burn time) for a future fire.
 - `Characters/BeerCrate.cs`: on the beer box; U/Space with an empty hand right by it hands out a copy of the players' bottle (12 in the box).
 - `Characters/RadioPlayer.cs`: the carryable radio; U/Space while held plays the next song or stops. Playlist = every clip in `Assets/Audio/Radio/` (rebuild the village after adding songs).
-- `Characters/SeaMineBomb.cs`: the washed-up Atom Bomb Sea Mine main objective on the beach — 1-hour countdown, `-60s` wrong-attempt penalty, bend-down inspection pose + first-person decipher entry (6 module slots: Module 1 word `TØNT`, Module 2 10 on/off contacts = `1110110010` (946 in binary), Module 3 cut the one right wire of 8 (needs `WireCutters` in hand; a wrong wire detonates = game lost; right wire set by `correctWireIndex`, colours in `Palette.BombWires`), Modules 4–6 placeholders).
+- `Characters/SeaMineBomb.cs`: the washed-up Atom Bomb Sea Mine main objective on the beach — 1-hour countdown, `-60s` wrong-attempt penalty, bend-down inspection pose + first-person decipher entry (6 module slots: Module 1 word `TØNT`, Module 2 10 on/off contacts = `1110110010` (946 in binary), Module 3 cut the one right wire of 8 (needs `WireCutters` in hand; a wrong wire detonates = game lost; right wire set by `correctWireIndex`, colours in `Palette.BombWires`), Module 4 three keyholes filled 1→3 by any of the three right `BombKey`s (a key with `FitsBomb` off won't turn and flashes the slot red; no keys placed in the village yet), Modules 5–6 placeholders).
+- `Characters/HouseDoor.cs`: a knockable village door (procedural knock sound, reply text); doors with an `HouseInterior` lead inside after a knock. Placed by `VillageHousesSetup` on every door the walkable area comes within 2.2 m of.
+- `Characters/HouseInterior.cs`: rooms inside a house; tracks who's inside, ignores the outer `Exit_Village` collider for them, and only enables the rooms (and lamps) while someone is in.
 - `Characters/ThirdPersonCameraRig.cs`: orbit and first-person camera. `SessionFirstPersonPreference` carries over between scenes.
 - `Characters/WalkableArea.cs`: allowed ground (corridors and zones). The motor slides along its edges.
 - `Core/Palette.cs`: **single source of truth for colours.** Use it instead of hard-coded colours (see `Docs/ArtBible.md`).
 - `Core/PlayerAuthBootstrap.cs` (Unity Services anonymous sign-in) and `Core/WebRuntimeConfig.cs` (WebGL frame pacing).
 - `UI/CharacterTestHud.cs`: the HUD in the test scene.
+- `UI/HouseDoorUi.cs`: door prompt (E / click / tap), knock replies, and the fade that moves the party (Follow companions too) through a door; switches to first person indoors.
 - `UI/SeaMineBombUi.cs`: top countdown timer badge, proximity prompt, and first-person 6-module decipher panel for `SeaMineBomb`.
 
 ## Editor tools: `Assets/Editor/` (namespace `Arnafjordur.Editor`)
 - Scene builders: see the table above.
 - Car: `GolfCarSetup.cs` (FBX → materials → `VWGolf.prefab`), then `CarOccupantsSetup.cs` (seats the 3 players → `VWGolf_WithPlayers.prefab`), then `CarBeerSetup.cs` (adds beers to that prefab). Menu: `Tools/Vehicles/...`.
 - `TunnelSetup.cs`: tunnel FBX pieces → `Environment/Tunnel/ArnafjordurTunnel.prefab`.
+- `VillageHousesSetup.cs`: reads `TunnelExit/VillageHouses.json`, makes nearby doors knockable, and builds the teal house interior (OSM house 21 + entrance wing 38: entrance hall, hallway, kitchen, living room, bathroom, bedroom; materials in `Environment/Village/Interior/`). Renders `Docs/preview/interior_*.png`.
 - Shared helpers used by the builders: `EveningLook.cs` (the outdoor evening lighting and fog for every scene outside the tunnel), `FjordWaterSetup.cs` (the sea shader on `Mat_Exit_FjordWater`), `RiverFit.cs` (rebuilds the Stórá river surface from `StoraRiver.json`) and `RoadTerrainFit.cs` (presses the terrain down under roads).
 - `WebOptimizer.cs`: WebGL release settings (`Tools/Apply Web Release Settings`).
 
@@ -66,7 +71,7 @@ These run across all the intro scenes: `IntroMusic.cs` (the car-radio song, whic
 - `Characters/<Name>/`: rigged FBX, textures, animator controllers (`_Locomotion` override, `_SitCar`, `_CarExit`). The shared base is `Characters/CharacterLocomotion.controller`.
 - `Vehicles/Golf/`: `VWGolf.fbx`, the prefabs and `Materials/Mat_Golf_*`.
 - `Environment/Tunnel/`, `TunnelExit/` (terrain, roads, village houses, river, sea, `FjordWater.shader`), `ChurchArrival/`, `Village/`.
-  - The JSON files are paths and data exported from Blender: `TunnelExitPath.json`, `ChurchArrivalPath.json`, `StoraRiver.json`, `Village/VillageWalkable.json`.
+  - The JSON files are paths and data exported from Blender: `TunnelExitPath.json`, `VillageHouses.json` (detailed houses with door + window spots), `ChurchArrivalPath.json`, `StoraRiver.json`, `Village/VillageWalkable.json`.
 - `Audio/Music/HowYouRemindMe.ogg`, `Props/Beer/`, `Settings/` (URP and volume profiles), `InputSystem_Actions.inputactions`.
 - Ignore `TutorialInfo/` and `Readme.asset`. They're Unity template leftovers.
 
@@ -74,7 +79,7 @@ These run across all the intro scenes: `IntroMusic.cs` (the car-radio song, whic
 Run with `blender --background --python <script> -- <args>` (each script's docstring gives the exact command).
 - `Vehicles/Blender/build_golf.py` → `VWGolf.fbx` (procedural Golf Mk7, ~1350 lines).
 - `Environment/Blender/build_tunnel.py` → the tunnel pieces.
-- `Environment/Blender/build_tunnel_exit.py` → `TunnelExit.fbx` and `TunnelExitPath.json`: terrain, roads and village, built from real elevation data (`arnafjordur_geo.npz`) and OpenStreetMap data (`arnafjordur_osm.json`). It's the reference for **world coordinates**.
+- `Environment/Blender/build_tunnel_exit.py` → `TunnelExit.fbx` and `TunnelExitPath.json`: terrain, roads and village, built from real elevation data (`arnafjordur_geo.npz`) and OpenStreetMap data (`arnafjordur_osm.json`). It's the reference for **world coordinates**. `--houses-only` rewrites just `VillageHouses.json` (~30 s, no FBX).
 - `Environment/Blender/build_church_arrival.py` → `ChurchArea.fbx` and `ChurchArrivalPath.json` (reuses the terrain logic from `build_tunnel_exit.py`).
 - `Environment/Blender/build_village_walkable.py` → `VillageWalkable.json` (roads, footpaths and the beach the player may walk on).
 - `Characters/Blender/rebuild_arms.py`: arm-mesh fix for the character rigs. The `.blend` files are the character sources. `*.blend1` and `backup_v1/` are backups.

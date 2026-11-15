@@ -150,6 +150,7 @@ namespace Arnafjordur.Editor
             Physics.SyncTransforms();
             BuildBeachWood(walkableData.seaLevel, seaMine != null ? seaMine.transform.position : Vector3.positiveInfinity);
             var walkableArea = BuildWalkableAndFootpaths(walkableData);
+            VillageHousesSetup.Build(walkableArea);
             FjordWaterSetup.ApplyToExisting();
 
             CharacterMotor[] motors = ExtractAndConfigurePlayers(exit, carGo, walkableArea, locomotionControllers, idleClips);
@@ -2701,6 +2702,10 @@ namespace Arnafjordur.Editor
             hud.Configure(partyController);
             EditorUtility.SetDirty(hud);
 
+            var doorUi = GetOrAdd<HouseDoorUi>(partyGo);
+            doorUi.Configure(partyController);
+            EditorUtility.SetDirty(doorUi);
+
             if (seaMine != null)
             {
                 var seaMineUi = GetOrAdd<SeaMineBombUi>(partyGo);
@@ -2972,6 +2977,7 @@ namespace Arnafjordur.Editor
                     Physics.SyncTransforms();
                 }
 
+                VillageHousesSetup.RenderPreviews(cam, previewDir, Shot);
                 cam.transform.SetPositionAndRotation(keepPos, keepRot);
                 cam.fieldOfView = keepFov;
                 RenderPocketItemsShot(cam, Path.Combine(previewDir, "village_pocket_items.png"));
@@ -3630,10 +3636,40 @@ namespace Arnafjordur.Editor
                 switchLevers[s] = pivot.transform;
             }
 
-            // Modules 3..6: 4 sealed placeholder bays along the bottom row.
+            // Modules 3..6 along the bottom row: module 4 gets three keyholes, the rest stay sealed for now.
+            var keyholeLights = new Renderer[SeaMineBomb.KeySlotCount];
+            var keyholeKeys = new GameObject[SeaMineBomb.KeySlotCount];
+            Material keyholeOffMat = SeaMineMaterial("Mat_SeaMine_KeyholeOff", Color.Lerp(Palette.DeepFjordSlate, Color.black, 0.5f), 0.4f, 0.3f);
             for (int p = 0; p < 4; p++)
             {
                 float px = -0.18f + p * 0.12f;
+                if (p == 1)
+                {
+                    BoxPart(PrimitiveType.Cube, "KeyBay_4", panelRoot.transform, new Vector3(px, -0.132f, 0.029f), new Vector3(0.10f, 0.072f, 0.016f), ironMat);
+                    for (int k = 0; k < SeaMineBomb.KeySlotCount; k++)
+                    {
+                        float kx = px - 0.03f + k * 0.03f;
+                        BoxPart(PrimitiveType.Cylinder, $"KeyholeRim_{k}", panelRoot.transform, new Vector3(kx, -0.132f, 0.038f), new Vector3(0.022f, 0.004f, 0.022f), keyholeOffMat);
+                        Transform rim = FindChildByName(panelRoot.transform, $"KeyholeRim_{k}");
+                        rim.localRotation = Quaternion.Euler(90f, 0f, 0f);
+                        keyholeLights[k] = rim.GetComponent<Renderer>();
+                        BoxPart(PrimitiveType.Cylinder, $"KeyholeFace_{k}", panelRoot.transform, new Vector3(kx, -0.132f, 0.041f), new Vector3(0.016f, 0.003f, 0.016f), brassMat);
+                        FindChildByName(panelRoot.transform, $"KeyholeFace_{k}").localRotation = Quaternion.Euler(90f, 0f, 0f);
+                        BoxPart(PrimitiveType.Cube, $"KeyholeSlot_{k}", panelRoot.transform, new Vector3(kx, -0.132f, 0.0425f), new Vector3(0.003f, 0.009f, 0.002f), keyholeOffMat);
+
+                        // a turned key's bow sticking out, shown once that slot has a right key in it
+                        var turnedKey = new GameObject($"TurnedKey_{k}");
+                        turnedKey.transform.SetParent(panelRoot.transform, false);
+                        turnedKey.transform.localPosition = new Vector3(kx, -0.132f, 0.044f);
+                        BoxPart(PrimitiveType.Cube, "Shank", turnedKey.transform, new Vector3(0f, 0f, 0.006f), new Vector3(0.010f, 0.003f, 0.012f), brassMat);
+                        BoxPart(PrimitiveType.Cylinder, "Bow", turnedKey.transform, new Vector3(0f, 0f, 0.016f), new Vector3(0.016f, 0.0015f, 0.016f), brassMat);
+                        turnedKey.SetActive(false);
+                        keyholeKeys[k] = turnedKey;
+                    }
+
+                    continue;
+                }
+
                 BoxPart(PrimitiveType.Cube, $"LockedBay_{p + 3}", panelRoot.transform, new Vector3(px, -0.132f, 0.029f), new Vector3(0.10f, 0.072f, 0.016f), ironMat);
                 BoxPart(PrimitiveType.Cube, $"LockedSeal_{p + 3}", panelRoot.transform, new Vector3(px, -0.132f, 0.038f), new Vector3(0.05f, 0.018f, 0.008f), atomicMat);
             }
@@ -3648,6 +3684,7 @@ namespace Arnafjordur.Editor
                 ledGreenMat,
                 ledAmberMat,
                 new Vector3(-1.38f, 0f, 0f));
+            seaMine.ConfigureKeyholes(keyholeLights, keyholeKeys, keyholeOffMat);
             seaMine.ResetBomb();
 
             EditorUtility.SetDirty(mineGo);
@@ -3826,23 +3863,75 @@ namespace Arnafjordur.Editor
                 AssertCondition("Sea mine bomb", bomb.TrySubmitContacts() && bomb.IsContactsSolved && !bomb.CanDeactivate,
                     "Expected target contacts to solve Module 2 while Module 3 (wires) still blocks deactivation.");
 
-                // Module 3: no cutters = no cut; with cutters the right wire solves it, a wrong one detonates.
+                // Module 3: no cutters = no cut; with cutters the 3-wire sequence (White, Blue, Red) solves it.
                 PickupItem cutterStandIn = olavurHolder != null ? olavurHolder.HeldItem : null;
                 AssertCondition("Sea mine bomb", cutterStandIn != null, "Expected the inspecting character to hold an item to stand in for wire cutters.");
-                int wrongWire = (bomb.CorrectWireIndex + 1) % SeaMineBomb.WireCount;
-                AssertCondition("Sea mine bomb", !bomb.TryCutWire(bomb.CorrectWireIndex) && !bomb.IsWireCut(bomb.CorrectWireIndex),
+                int firstWire = bomb.CorrectWireSequence[0];
+                AssertCondition("Sea mine bomb", !bomb.TryCutWire(firstWire) && !bomb.IsWireCut(firstWire),
                     "Expected cutting a wire without wire cutters to do nothing.");
                 var tempCutters = cutterStandIn.gameObject.AddComponent<WireCutters>();
                 try
                 {
-                    AssertCondition("Sea mine bomb", bomb.TryCutWire(bomb.CorrectWireIndex) && bomb.IsWiresSolved && bomb.CanDeactivate && !bomb.IsExploded,
-                        "Expected the correct wire to solve Module 3 and unlock deactivation.");
+                    for (int w = 0; w < bomb.CorrectWireSequence.Count; w++)
+                    {
+                        bool cutOk = bomb.TryCutWire(bomb.CorrectWireSequence[w]);
+                        bool expectedSolved = w == bomb.CorrectWireSequence.Count - 1;
+                        AssertCondition("Sea mine bomb", cutOk && bomb.IsWiresSolved == expectedSolved && !bomb.IsExploded,
+                            $"Expected wire step {w + 1} to succeed (IsWiresSolved={bomb.IsWiresSolved}).");
+                    }
+
+                    AssertCondition("Sea mine bomb", bomb.IsWiresSolved && !bomb.CanDeactivate && !bomb.IsExploded,
+                        "Expected the wire sequence to solve Module 3 while Module 4 (keys) still blocks deactivation.");
+
+                    // Module 4: a beer is no key; a decoy key won't turn and flashes slot 1; three right keys fill slots 1-3.
+                    AssertCondition("Sea mine bomb", !bomb.TryUseKey() && bomb.KeysTurned == 0,
+                        "Expected the keyholes to refuse an item that isn't a key.");
+                    var testKeys = new List<PickupItem>();
+                    for (int k = 0; k < 4; k++)
+                    {
+                        var keyGo = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                        keyGo.name = k < 3 ? $"TestBombKey_{k + 1}" : "TestDecoyKey";
+                        keyGo.transform.localScale = new Vector3(0.02f, 0.06f, 0.005f);
+                        var keyItem = keyGo.AddComponent<PickupItem>();
+                        keyItem.Configure("Key", 0f, 0.01f, true, "Use", false);
+                        keyGo.AddComponent<BombKey>().Configure(k < 3);
+                        testKeys.Add(keyItem);
+                    }
+
+                    try
+                    {
+                        olavurHolder.TryPickup(testKeys[3]);
+                        AssertCondition("Sea mine bomb", !bomb.TryUseKey() && bomb.KeysTurned == 0 && bomb.KeyRejectSlot == 0 && bomb.KeyRejectFlashTimer > 0f
+                            && olavurHolder.HeldItem == testKeys[3],
+                            "Expected a decoy key to stay in hand, not turn, and flash slot 1 red.");
+                        bomb.Tick(SeaMineBomb.KeyRejectFlashSeconds + 0.1f);
+                        AssertCondition("Sea mine bomb", bomb.KeyRejectSlot == -1, "Expected the red flash to go out again.");
+                        for (int k = 0; k < 3; k++)
+                        {
+                            olavurHolder.TryPickup(testKeys[k]);
+                            AssertCondition("Sea mine bomb", bomb.TryUseKey() && bomb.KeysTurned == k + 1 && olavurHolder.HeldItem == null,
+                                $"Expected right key {k + 1} to turn in slot {k + 1}.");
+                        }
+
+                        AssertCondition("Sea mine bomb", bomb.IsKeysSolved && bomb.CanDeactivate, "Expected three turned keys to solve Module 4 and unlock deactivation.");
+                    }
+                    finally
+                    {
+                        if (cutterStandIn != null) olavurHolder.TryPickup(cutterStandIn);
+                    }
                     AssertCondition("Sea mine bomb", bomb.TryDeactivate() && bomb.IsDisarmed,
                         "Expected TryDeactivate() to disarm the bomb once active modules are solved.");
 
                     bomb.ResetBomb();
+                    int wrongWire = bomb.CorrectWireSequence[1]; // out of order (Blue before White) detonates
                     AssertCondition("Sea mine bomb", bomb.TryCutWire(wrongWire) && bomb.IsExploded && !bomb.IsWiresSolved,
-                        "Expected a wrong wire to detonate the mine (game lost).");
+                        "Expected a wrong wire or wrong order to detonate the mine (game lost).");
+
+                    // the test keys were handed back by ResetBomb; remove them from the scene
+                    foreach (BombKey leftover in UnityEngine.Object.FindObjectsByType<BombKey>(FindObjectsInactive.Include, FindObjectsSortMode.None))
+                    {
+                        if (leftover.name.StartsWith("Test")) UnityEngine.Object.DestroyImmediate(leftover.gameObject);
+                    }
                 }
                 finally
                 {
@@ -3873,7 +3962,7 @@ namespace Arnafjordur.Editor
                 cameraRig.SetOrbit(16f, 18f, 5.6f, snap: true);
             }
 
-            Debug.Log("[VillageSceneSetup] Sea mine bomb verification: OK (3600s timer, -60s penalty, TØNT + 10 contacts (946) + wires (right cut / wrong detonates), FP & third-person bending pose)");
+            Debug.Log("[VillageSceneSetup] Sea mine bomb verification: OK (3600s timer, -60s penalty, TØNT + 10 contacts (946) + wires (right cut / wrong detonates) + 3 keys (decoy refused), FP & third-person bending pose)");
         }
 
         private static void AssertCondition(string area, bool condition, string message)
