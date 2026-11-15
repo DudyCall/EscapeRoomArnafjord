@@ -434,6 +434,22 @@ terrain_img = save_png("Exit_Terrain_Albedo", col)
 det = 0.5 + (fractal(512, 0.9, 41) - 0.5) * 0.55 + (fractal(512, 1.8, 42) - 0.5) * 0.35
 save_png("Exit_Terrain_Detail", np.stack([det, det, det], -1), non_color=True)
 
+# 512x512 Tileable house cladding / corrugated roof detail (neutral 0.5 for URP _DETAIL_MULX2)
+h_rng = np.random.default_rng(83)
+px_u = np.arange(512)
+board_w = 32  # 16 boards per UV tile (12.5 cm per board at 0.5 UV cycles/m)
+phase_u = (px_u % board_w) / float(board_w)
+board_id = px_u // board_w
+board_tone = h_rng.uniform(-0.035, 0.035, 512 // board_w)[board_id]
+groove = -0.14 * np.exp(-((phase_u - 0.0) / 0.065) ** 2) - 0.14 * np.exp(-((phase_u - 1.0) / 0.065) ** 2)
+bevel = 0.035 * np.exp(-((phase_u - 0.12) / 0.07) ** 2)
+u_strip = (board_tone + groove + bevel)[None, :]
+grain_raw = fractal(512, 1.3, 81)
+grain_vert = np.mean([np.roll(grain_raw, shift, axis=0) for shift in range(-8, 9, 2)], axis=0) - 0.5
+weather = fractal(512, 0.9, 82) - 0.5
+h_det = np.clip(0.5 + u_strip + grain_vert * 0.18 + weather * 0.10, 0.22, 0.78)
+save_png("Exit_House_Detail", np.stack([h_det, h_det, h_det], -1), non_color=True)
+
 # 512x512 Weathered Faroese concrete portal albedo (damp streaks + slight mossy weathering)
 pn1 = fractal(512, 1.5, 71)
 pn2 = fractal(512, 0.8, 72)
@@ -487,15 +503,20 @@ MATS = {
     "RiverWater": make_mat("RiverWater", (0.09, 0.15, 0.18), None, 0.12),
     "RoadSign": make_mat("RoadSign", (0.85, 0.85, 0.85), signs_img, 0.42),
     "GuardrailMetal": make_mat("GuardrailMetal", (0.46, 0.48, 0.50), None, 0.45, 0.72),
-    "HouseBlack": make_mat("HouseBlack", (0.035, 0.036, 0.04), None, 0.72),
-    "HouseWhite": make_mat("HouseWhite", (0.84, 0.835, 0.79), None, 0.70),
-    "HouseRed": make_mat("HouseRed", (0.44, 0.07, 0.05), None, 0.68),
-    "HouseGrey": make_mat("HouseGrey", (0.28, 0.30, 0.31), None, 0.72),
+    "HouseBlack": make_mat("HouseBlack", (0.032, 0.034, 0.038), None, 0.74),
+    "HouseWhite": make_mat("HouseWhite", (0.88, 0.89, 0.88), None, 0.70),
+    "HouseRed": make_mat("HouseRed", (0.36, 0.055, 0.048), None, 0.70),
+    "HouseGrey": make_mat("HouseGrey", (0.74, 0.76, 0.78), None, 0.82),
+    "HouseTeal": make_mat("HouseTeal", (0.24, 0.44, 0.40), None, 0.70),
+    "HouseYellow": make_mat("HouseYellow", (0.72, 0.50, 0.14), None, 0.70),
+    "HouseDoor": make_mat("HouseDoor", (0.14, 0.26, 0.18), None, 0.55),
+    "HouseTimber": make_mat("HouseTimber", (0.26, 0.20, 0.15), None, 0.78),
     "HouseWindow": make_mat("HouseWindow", (0.06, 0.09, 0.12), None, 0.12),
-    "RoofTurf": make_mat("RoofTurf", (0.16, 0.24, 0.08), None, 0.95),
-    "RoofRed": make_mat("RoofRed", (0.46, 0.09, 0.06), None, 0.58),
-    "RoofGrey": make_mat("RoofGrey", (0.21, 0.22, 0.24), None, 0.50),
-    "RoofBlack": make_mat("RoofBlack", (0.06, 0.065, 0.07), None, 0.62),
+    "HouseWindowLit": make_mat("HouseWindowLit", (0.89, 0.62, 0.33), None, 0.15),
+    "RoofTurf": make_mat("RoofTurf", (0.11, 0.23, 0.16), None, 0.72),
+    "RoofRed": make_mat("RoofRed", (0.42, 0.09, 0.07), None, 0.58),
+    "RoofGrey": make_mat("RoofGrey", (0.20, 0.22, 0.24), None, 0.52),
+    "RoofBlack": make_mat("RoofBlack", (0.05, 0.055, 0.062), None, 0.62),
 }
 
 
@@ -957,6 +978,194 @@ add_road_strip(water, riv_pts, half_w=1.85, mat="RiverWater")
 
 # ------------------------------------------------------------------ village, Árnafjarðar kirkja, harbour & salmon pens
 village = MB()
+WALKABLE_BOX = (300.0, 500.0, 240.0, 480.0)
+
+
+def _load_walkable_bounds():
+    candidates = [
+        os.path.join(OUT, "..", "Village", "VillageWalkable.json"),
+        os.path.join(HERE, "..", "..", "ArnafjordurEscapeRoom", "Assets", "Environment", "Village", "VillageWalkable.json"),
+    ]
+    for path in candidates:
+        if os.path.isfile(path):
+            with open(path, "r", encoding="utf-8") as fh:
+                wdata = json.load(fh)
+            corridors = []
+            for c in wdata.get("corridors", []):
+                pts = [(p["x"], p["z"]) for p in c.get("points", [])]
+                if len(pts) >= 2:
+                    corridors.append((c["name"], float(c["halfWidth"]), pts))
+            for fp in wdata.get("footpaths", []):
+                pts = [(p["x"], p["z"]) for p in fp.get("points", [])]
+                if len(pts) >= 2:
+                    corridors.append((fp["name"], float(fp["halfWidth"]), pts))
+            beach_poly = []
+            for z in wdata.get("zones", []):
+                if z.get("name") == "Beach":
+                    beach_poly = [(p["x"], p["z"]) for p in z.get("outline", [])]
+                    break
+            return corridors, beach_poly
+
+    fallback = [(f"vroad_{i}", 1.45, [tuple(p) for p in vr]) for i, vr in enumerate(osm["village_roads"][:4])]
+    fallback += [
+        ("ChurchPath", 0.95, [(400.6, 286.6), (402.0, 290.4), (402.75, 293.55)]),
+        ("BeachPathSouth", 0.95, [(395.45, 315.2), (408.0, 315.3), (423.5, 315.4), (430.0, 317.5)]),
+        ("BeachPathNorth", 0.95, [(400.75, 399.2), (413.0, 398.6), (424.0, 393.5)]),
+    ]
+    return fallback, []
+
+
+WALK_CORRIDORS, WALK_BEACH_POLY = _load_walkable_bounds()
+
+
+def _seg_dist_2d(px, pz, ax, az, bx, bz):
+    dx, dz = bx - ax, bz - az
+    l2 = dx * dx + dz * dz
+    t = 0.0 if l2 < 1e-12 else min(1.0, max(0.0, ((px - ax) * dx + (pz - az) * dz) / l2))
+    return math.hypot(px - (ax + dx * t), pz - (az + dz * t))
+
+
+def _inside_poly_2d(px, pz, poly):
+    inside = False
+    n = len(poly)
+    if n < 3:
+        return False
+    j = n - 1
+    for i in range(n):
+        ax, az = poly[i]
+        bx, bz = poly[j]
+        if (az > pz) != (bz > pz) and px < (bx - ax) * (pz - az) / (bz - az) + ax:
+            inside = not inside
+        j = i
+    return inside
+
+
+def walkable_edge_clearance(px, pz):
+    best = 1e9
+    for _, hw, pts in WALK_CORRIDORS:
+        d = min(_seg_dist_2d(px, pz, a[0], a[1], b[0], b[1]) for a, b in zip(pts[:-1], pts[1:]))
+        best = min(best, d - hw)
+    if len(WALK_BEACH_POLY) >= 3:
+        d_edge = min(_seg_dist_2d(px, pz, WALK_BEACH_POLY[i][0], WALK_BEACH_POLY[i][1],
+                                  WALK_BEACH_POLY[(i + 1) % len(WALK_BEACH_POLY)][0],
+                                  WALK_BEACH_POLY[(i + 1) % len(WALK_BEACH_POLY)][1])
+                     for i in range(len(WALK_BEACH_POLY)))
+        if _inside_poly_2d(px, pz, WALK_BEACH_POLY):
+            d_edge = -d_edge
+        best = min(best, d_edge)
+    return best
+
+
+def road_or_path_distance(px, pz):
+    best = 1e9
+    for _, _, pts in WALK_CORRIDORS:
+        d = min(_seg_dist_2d(px, pz, a[0], a[1], b[0], b[1]) for a, b in zip(pts[:-1], pts[1:]))
+        best = min(best, d)
+    return best
+
+
+def _point_obb_dist(px, pz, cx, cz, yaw, w, d):
+    c, s = math.cos(yaw), math.sin(yaw)
+    dx, dz = px - cx, pz - cz
+    lx = dx * c - dz * s
+    lz = dx * s + dz * c
+    ox = abs(lx) - w * 0.5
+    oz = abs(lz) - d * 0.5
+    return math.hypot(max(ox, 0.0), max(oz, 0.0)) + min(max(ox, oz), 0.0)
+
+
+def _compute_building_obbs():
+    obbs = []
+    for idx, b in enumerate(osm["buildings"]):
+        if b["kind"] == "construction":
+            continue
+        if b["kind"] == "church":
+            w, d, yaw = max(b["w"], 12.6), max(b["d"], 8.4), b["yaw"]
+        else:
+            w, d, yaw = max(b["w"], 3.5), max(b["d"], 3.5), b["yaw"]
+            if d > w:
+                w, d = d, w
+                yaw += math.pi * 0.5
+        c, s = math.cos(yaw), math.sin(yaw)
+        cx, cz = b["x"], b["z"]
+        c_ys = [float(bil(H, cx + sx * w * 0.5 * c + sz * d * 0.5 * s,
+                           cz - sx * w * 0.5 * s + sz * d * 0.5 * c))
+                for sx in (-1, 1) for sz in (-1, 1)]
+        if max(c_ys) < SEA + 0.6:
+            continue
+        obbs.append((idx, cx, cz, yaw, w, d))
+    return obbs
+
+
+BUILDING_OBBS = _compute_building_obbs()
+
+
+def neighbor_dist(b_idx, px, pz):
+    best = 1e9
+    for o_idx, ocx, ocz, oyaw, ow, od in BUILDING_OBBS:
+        if o_idx == b_idx:
+            continue
+        d = _point_obb_dist(px, pz, ocx, ocz, oyaw, ow, od)
+        if d < best:
+            best = d
+    return best
+
+
+def wall_clearance(b_idx, cx, cz, yaw, w, d, nx_loc, nz_loc):
+    c, s = math.cos(yaw), math.sin(yaw)
+    best = 1e9
+    for u in (-0.28, 0.0, 0.28):
+        if abs(nz_loc) > 0.5:
+            lx = u * w
+            lz = nz_loc * (d * 0.5 + 0.05)
+        else:
+            lx = nx_loc * (w * 0.5 + 0.05)
+            lz = u * d
+        px = cx + lx * c + lz * s
+        pz = cz - lx * s + lz * c
+        best = min(best, neighbor_dist(b_idx, px, pz))
+    return best
+
+
+def _quad_uvs(pts, mat, uv_scale=0.5, u_axis=None, v_axis=None):
+    p0 = Vector(pts[0])
+    if u_axis is None:
+        du = Vector(pts[1]) - p0
+        u_axis = du.normalized() if du.length > 1e-6 else Vector((1.0, 0.0, 0.0))
+    if v_axis is None:
+        dv = Vector(pts[3]) - p0
+        v_axis = dv.normalized() if dv.length > 1e-6 else Vector((0.0, 1.0, 0.0))
+    uvs = []
+    for p in pts:
+        dvec = Vector(p) - p0
+        u = dvec.dot(u_axis) * uv_scale
+        v = dvec.dot(v_axis) * uv_scale
+        if mat == "PortalConcrete":
+            # Keep concrete UVs inside the clean grey band of Exit_Portal_Albedo.png (below moss v > 0.62)
+            u = 0.10 + min(0.40, abs(u) * 0.08)
+            v = 0.10 + min(0.40, abs(v) * 0.08)
+        uvs.append((u, v))
+    return uvs
+
+
+def add_quad_uv(mb, p0, p1, p2, p3, mat, want_dir, uv_scale=0.5, u_axis=None, v_axis=None):
+    pts = [p0, p1, p2, p3]
+    uvs = _quad_uvs(pts, mat, uv_scale, u_axis, v_axis)
+    mb.add(pts, [[0, 1, 2, 3]], mat, want_dir, uvs)
+
+
+def add_box_uv(mb, bot4, top4, mat, uv_scale=0.5, include_bottom=False, include_top=True, skip_sides=()):
+    cen = sum((Vector(p) for p in bot4 + top4), Vector((0.0, 0.0, 0.0))) / 8.0
+    out_w = lambda q, c=cen: tuple(q - c)
+    for i in range(4):
+        if i in skip_sides:
+            continue
+        j = (i + 1) % 4
+        add_quad_uv(mb, bot4[i], bot4[j], top4[j], top4[i], mat, out_w, uv_scale)
+    if include_top:
+        add_quad_uv(mb, top4[0], top4[1], top4[2], top4[3], mat, out_w, uv_scale)
+    if include_bottom:
+        add_quad_uv(mb, bot4[3], bot4[2], bot4[1], bot4[0], mat, out_w, uv_scale)
 
 
 def add_box(mb, pts_8, mat, cen):
@@ -964,7 +1173,7 @@ def add_box(mb, pts_8, mat, cen):
     mb.add(pts_8, [[0, 1, 5, 4], [1, 2, 6, 5], [2, 3, 7, 6], [3, 0, 4, 7], [4, 5, 6, 7]], mat, out_w)
 
 
-def house(cx, cz, yaw, w, d, h, roof_h, wall, roof, windows=True, is_church=False):
+def house(cx, cz, yaw, w, d, h, roof_h, wall, roof, windows=True, is_church=False, b_idx=0, kind="house", trim_override=None, plinth_override=None):
     # Ensure corners are grounded cleanly on slopes
     c, s = math.cos(yaw), math.sin(yaw)
 
@@ -983,38 +1192,38 @@ def house(cx, cz, yaw, w, d, h, roof_h, wall, roof, windows=True, is_church=Fals
 
     b = y_min - y0 - 1.4
     corners = [(-w / 2, -d / 2), (w / 2, -d / 2), (w / 2, d / 2), (-w / 2, d / 2)]
-    vs = [PL(x, b, z) for x, z in corners] + [PL(x, h, z) for x, z in corners]
-    cen = Vector(PL(0, h / 2, 0))
-    out = lambda q, cen=cen: tuple(q - cen)
-    village.add(vs, [[0, 1, 5, 4], [1, 2, 6, 5], [2, 3, 7, 6], [3, 0, 4, 7]], wall, out)
 
-    o = 0.32
-    r = [
-        PL(-w / 2 - o, h - 0.1, -d / 2 - o), PL(w / 2 + o, h - 0.1, -d / 2 - o),
-        PL(w / 2 + o, h - 0.1, d / 2 + o), PL(-w / 2 - o, h - 0.1, d / 2 + o),
-        PL(-w / 2 - o, h + roof_h, 0), PL(w / 2 + o, h + roof_h, 0),
-    ]
-    village.add(r, [[0, 1, 5, 4], [3, 2, 5, 4]], roof, lambda q, cen=cen: (q[0] - cen[0], 3.0, q[2] - cen[2]))
-    g = [
-        PL(-w / 2, h, -d / 2), PL(-w / 2, h, d / 2), PL(-w / 2, h + roof_h - 0.08, 0),
-        PL(w / 2, h, -d / 2), PL(w / 2, h, d / 2), PL(w / 2, h + roof_h - 0.08, 0),
-    ]
-    village.add(g, [[0, 1, 2], [3, 4, 5]], wall, out)
-
-    if windows and w >= 5.5 and d >= 4.0:
-        n_win = 4 if is_church else max(2, min(4, int(w / 3.2)))
-        wh = 1.65 if is_church else 1.05
-        ww = 0.75 if is_church else 0.85
-        wy0 = 1.05 if is_church else max(0.95, h * 0.38)
-        for side in (-1, 1):
-            lz = side * (d * 0.5 + 0.04)
-            for wi in range(n_win):
-                lx = (w * 0.68) * ((wi + 0.5) / n_win - 0.5)
-                wv = [PL(lx - ww * 0.5, wy0, lz), PL(lx + ww * 0.5, wy0, lz),
-                      PL(lx + ww * 0.5, wy0 + wh, lz), PL(lx - ww * 0.5, wy0 + wh, lz)]
-                village.add(wv, [[0, 1, 2, 3]], "HouseWindow", lambda q, cen=cen: tuple(q - cen))
-
+    # Keep Árnafjarðar kirkja backdrop shell intact for ChurchDetail in ChurchArea.fbx
     if is_church:
+        vs = [PL(x, b, z) for x, z in corners] + [PL(x, h, z) for x, z in corners]
+        cen = Vector(PL(0, h / 2, 0))
+        out = lambda q, cen=cen: tuple(q - cen)
+        village.add(vs, [[0, 1, 5, 4], [1, 2, 6, 5], [2, 3, 7, 6], [3, 0, 4, 7]], wall, out)
+
+        o = 0.32
+        r = [
+            PL(-w / 2 - o, h - 0.1, -d / 2 - o), PL(w / 2 + o, h - 0.1, -d / 2 - o),
+            PL(w / 2 + o, h - 0.1, d / 2 + o), PL(-w / 2 - o, h - 0.1, d / 2 + o),
+            PL(-w / 2 - o, h + roof_h, 0), PL(w / 2 + o, h + roof_h, 0),
+        ]
+        village.add(r, [[0, 1, 5, 4], [3, 2, 5, 4]], roof, lambda q, cen=cen: (q[0] - cen[0], 3.0, q[2] - cen[2]))
+        g = [
+            PL(-w / 2, h, -d / 2), PL(-w / 2, h, d / 2), PL(-w / 2, h + roof_h - 0.08, 0),
+            PL(w / 2, h, -d / 2), PL(w / 2, h, d / 2), PL(w / 2, h + roof_h - 0.08, 0),
+        ]
+        village.add(g, [[0, 1, 2], [3, 4, 5]], wall, out)
+
+        if windows and w >= 5.5 and d >= 4.0:
+            n_win = 4
+            wh, ww, wy0 = 1.65, 0.75, 1.05
+            for side in (-1, 1):
+                lz = side * (d * 0.5 + 0.04)
+                for wi in range(n_win):
+                    lx = (w * 0.68) * ((wi + 0.5) / n_win - 0.5)
+                    wv = [PL(lx - ww * 0.5, wy0, lz), PL(lx + ww * 0.5, wy0, lz),
+                          PL(lx + ww * 0.5, wy0 + wh, lz), PL(lx - ww * 0.5, wy0 + wh, lz)]
+                    village.add(wv, [[0, 1, 2, 3]], "HouseWindow", lambda q, cen=cen: tuple(q - cen))
+
         # Traditional Faroese bell-cote (fleche) at the west gable end of Árnafjarðar kirkja
         tx0 = -w * 0.33
         tw = 1.9
@@ -1024,47 +1233,551 @@ def house(cx, cz, yaw, w, d, h, roof_h, wall, roof, windows=True, is_church=Fals
         tvs = [PL(tx0 + x, th0, z) for x, z in t_c] + [PL(tx0 + x, th1, z) for x, z in t_c]
         tcen = Vector(PL(tx0, 0.5 * (th0 + th1), 0))
         add_box(village, tvs, "HouseWhite", tcen)
-        # Red pyramid spire cap
         sh = th1 + 2.8
         svs = [PL(tx0 + x, th1, z) for x, z in t_c] + [PL(tx0, sh, 0)]
         scen = Vector(PL(tx0, th1 + 1.0, 0))
         village.add(svs, [[0, 1, 4], [1, 2, 4], [2, 3, 4], [3, 0, 4]], "RoofRed", lambda q, sc=scen: tuple(q - sc))
+        return True
+
+    in_walkable = (WALKABLE_BOX[0] <= cx <= WALKABLE_BOX[1] and WALKABLE_BOX[2] <= cz <= WALKABLE_BOX[3])
+    is_detailed = in_walkable
+
+    # Contrasting Faroese trim and door materials
+    if trim_override is not None:
+        trim_mat = trim_override
+    elif wall in ("HouseBlack", "HouseTimber"):
+        trim_mat = wall
+    else:
+        trim_mat = "HouseWhite"
+
+    if wall == "HouseRed":
+        door_mat = "HouseWhite" if b_idx % 2 == 0 else "HouseDoor"
+    elif wall in ("HouseWhite", "HouseTeal", "HouseYellow"):
+        door_mat = ("HouseWhite", "HouseDoor", "HouseBlack")[b_idx % 3]
+    else:
+        door_mat = ("HouseTimber", "HouseBlack", "HouseDoor")[b_idx % 3]
+
+    if plinth_override is not None:
+        plinth_mat = plinth_override
+    elif wall in ("HouseWhite", "HouseRed", "HouseTeal", "HouseYellow") and w >= 5.8:
+        plinth_mat = "HouseGrey"
+    else:
+        plinth_mat = "PortalConcrete" if b_idx % 2 == 0 else "BasaltRock"
+    plinth_h = 0.34 if is_detailed else 0.28
+    plinth_pad = 0.04 if is_detailed else 0.03
+
+    # Clearances per wall (for overhang trimming and exposed facade placement)
+    clear_zp = wall_clearance(b_idx, cx, cz, yaw, w, d, 0.0, 1.0)
+    clear_zn = wall_clearance(b_idx, cx, cz, yaw, w, d, 0.0, -1.0)
+    clear_xp = wall_clearance(b_idx, cx, cz, yaw, w, d, 1.0, 0.0)
+    clear_xn = wall_clearance(b_idx, cx, cz, yaw, w, d, -1.0, 0.0)
+
+    # 1. Foundation Plinth (kjallari) + water-table ledge
+    p_corners = [(-w / 2 - plinth_pad, -d / 2 - plinth_pad), (w / 2 + plinth_pad, -d / 2 - plinth_pad),
+                 (w / 2 + plinth_pad, d / 2 + plinth_pad), (-w / 2 - plinth_pad, d / 2 + plinth_pad)]
+    add_box_uv(village, [PL(x, b, z) for x, z in p_corners], [PL(x, plinth_h, z) for x, z in p_corners],
+               plinth_mat, uv_scale=0.5, include_top=True)
+    if is_detailed:
+        wt_pad = plinth_pad + 0.02
+        wt_corners = [(-w / 2 - wt_pad, -d / 2 - wt_pad), (w / 2 + wt_pad, -d / 2 - wt_pad),
+                      (w / 2 + wt_pad, d / 2 + wt_pad), (-w / 2 - wt_pad, d / 2 + wt_pad)]
+        add_box_uv(village, [PL(x, plinth_h - 0.06, z) for x, z in wt_corners],
+                   [PL(x, plinth_h + 0.015, z) for x, z in wt_corners],
+                   plinth_mat, uv_scale=0.5, include_top=True)
+
+    # 2. Main Timber Walls (overlapping plinth top slightly so there is no crack)
+    wall_y0 = plinth_h - 0.02
+    add_box_uv(village, [PL(x, wall_y0, z) for x, z in corners], [PL(x, h, z) for x, z in corners],
+               wall, uv_scale=0.5, include_top=False)
+
+    # Gable triangles with vertically aligned cladding UVs
+    cen = Vector(PL(0, h * 0.5, 0))
+    out = lambda q, cen=cen: tuple(q - cen)
+    for gx, g_norm_sign in ((-w * 0.5, -1.0), (w * 0.5, 1.0)):
+        gt0 = PL(gx, h - 0.02, -d * 0.5)
+        gt1 = PL(gx, h - 0.02, d * 0.5)
+        gt2 = PL(gx, h + roof_h, 0.0)
+        u_ax = (Vector(gt1) - Vector(gt0)).normalized()
+        v_ax = Vector((0.0, 1.0, 0.0))
+        uvs_g = [
+            (0.0, (h - 0.02 - wall_y0) * 0.5),
+            (d * 0.5, (h - 0.02 - wall_y0) * 0.5),
+            (d * 0.25, (h + roof_h - wall_y0) * 0.5),
+        ]
+        village.add([gt0, gt1, gt2], [[0, 1, 2]], wall,
+                    lambda q, gns=g_norm_sign: (gns * c, 0.0, -gns * s), uvs_g)
+
+    # 3. Roof Slab (real thickness + soffit + eaves fascia + gable rake bargeboards)
+    slope = roof_h / max(d * 0.5, 0.5)
+    max_oz = min(0.34, 0.24 / max(slope, 0.2))
+    oz_pos = max_oz if clear_zp >= 0.45 else 0.05
+    oz_neg = max_oz if clear_zn >= 0.45 else 0.05
+    ox_pos = (0.28 if is_detailed else 0.24) if clear_xp >= 0.45 else 0.04
+    ox_neg = (0.28 if is_detailed else 0.24) if clear_xn >= 0.45 else 0.04
+    t_roof = 0.16 if is_detailed else 0.12
+
+    x0_r = -w * 0.5 - ox_neg
+    x1_r = w * 0.5 + ox_pos
+    y_rb = h + roof_h
+    y_rt = y_rb + t_roof
+
+    for side, oz_s in ((-1.0, oz_neg), (1.0, oz_pos)):
+        z_e = side * (d * 0.5 + oz_s)
+        y_eb = h - slope * oz_s
+        y_et = y_eb + t_roof
+
+        bot4 = [PL(x0_r, y_rb, 0.0), PL(x1_r, y_rb, 0.0), PL(x1_r, y_eb, z_e), PL(x0_r, y_eb, z_e)]
+        top4 = [PL(x0_r, y_rt, 0.0), PL(x1_r, y_rt, 0.0), PL(x1_r, y_et, z_e), PL(x0_r, y_et, z_e)]
+        rcen = sum((Vector(p) for p in bot4 + top4), Vector((0.0, 0.0, 0.0))) / 8.0
+        rout = lambda q, rc=rcen: tuple(q - rc)
+
+        # Top roof slope (u along ridge X, v down slope -> corrugated seams run down-slope)
+        add_quad_uv(village, top4[0], top4[1], top4[2], top4[3], roof, rout, uv_scale=0.5)
+        # Soffit underside
+        add_quad_uv(village, bot4[3], bot4[2], bot4[1], bot4[0], trim_mat if is_detailed else roof, rout, uv_scale=0.5)
+        # Eave fascia board (side 2)
+        add_quad_uv(village, bot4[2], bot4[3], top4[3], top4[2], trim_mat if is_detailed else roof, rout, uv_scale=0.5)
+        # Gable rake edges (sides 1 and 3)
+        add_quad_uv(village, bot4[1], bot4[2], top4[2], top4[1], trim_mat if is_detailed else roof, rout, uv_scale=0.5)
+        add_quad_uv(village, bot4[3], bot4[0], top4[0], top4[3], trim_mat if is_detailed else roof, rout, uv_scale=0.5)
+
+        if is_detailed:
+            # Proud gable bargeboard strip (vindskide) along both gable rakes
+            for rx_in, rx_out in ((x0_r - 0.035, x0_r + 0.015), (x1_r - 0.015, x1_r + 0.035)):
+                b_bot4 = [PL(rx_in, y_rb - 0.03, 0.0), PL(rx_out, y_rb - 0.03, 0.0),
+                          PL(rx_out, y_eb - 0.03, z_e), PL(rx_in, y_eb - 0.03, z_e)]
+                b_top4 = [PL(rx_in, y_rt + 0.03, 0.0), PL(rx_out, y_rt + 0.03, 0.0),
+                          PL(rx_out, y_et + 0.03, z_e), PL(rx_in, y_et + 0.03, z_e)]
+                add_box_uv(village, b_bot4, b_top4, trim_mat, uv_scale=0.5, include_bottom=True, skip_sides=(0,))
+
+            # Traditional timber turf retainer edge board (torvhald) along lower eaves of turf roofs
+            if roof == "RoofTurf" and kind == "boathouse":
+                z_ret_in = side * (d * 0.5 + oz_s - 0.06)
+                z_ret_out = side * (d * 0.5 + oz_s + 0.01)
+                z_r0, z_r1 = min(z_ret_in, z_ret_out), max(z_ret_in, z_ret_out)
+                add_box_uv(village,
+                           [PL(x0_r, y_et - 0.02, z_r0), PL(x1_r, y_et - 0.02, z_r0),
+                            PL(x1_r, y_et - 0.02, z_r1), PL(x0_r, y_et - 0.02, z_r1)],
+                           [PL(x0_r, y_et + 0.09, z_r0), PL(x1_r, y_et + 0.09, z_r0),
+                            PL(x1_r, y_et + 0.09, z_r1), PL(x0_r, y_et + 0.09, z_r1)],
+                           "HouseTimber", uv_scale=0.5, include_bottom=False)
+
+            # Rainwater gutter along the eaves
+            gutter_mat = "HouseBlack" if wall != "HouseBlack" else "HouseGrey"
+            zg_in = side * (d * 0.5 + oz_s + 0.005)
+            zg_out = side * (d * 0.5 + oz_s + 0.075)
+            zg0, zg1 = min(zg_in, zg_out), max(zg_in, zg_out)
+            add_box_uv(village,
+                       [PL(x0_r, y_eb - 0.02, zg0), PL(x1_r, y_eb - 0.02, zg0),
+                        PL(x1_r, y_eb - 0.02, zg1), PL(x0_r, y_eb - 0.02, zg1)],
+                       [PL(x0_r, y_eb + 0.055, zg0), PL(x1_r, y_eb + 0.055, zg0),
+                        PL(x1_r, y_eb + 0.055, zg1), PL(x0_r, y_eb + 0.055, zg1)],
+                       gutter_mat, uv_scale=0.5, include_bottom=True)
+
+    if is_detailed:
+        # Ridge cap beam
+        ridge_mat = trim_mat if roof == "RoofBlack" else "RoofBlack"
+        add_box_uv(village,
+                   [PL(x0_r - 0.01, y_rt - 0.03, -0.09), PL(x1_r + 0.01, y_rt - 0.03, -0.09),
+                    PL(x1_r + 0.01, y_rt - 0.03, 0.09), PL(x0_r - 0.01, y_rt - 0.03, 0.09)],
+                   [PL(x0_r - 0.01, y_rt + 0.065, -0.09), PL(x1_r + 0.01, y_rt + 0.065, -0.09),
+                    PL(x1_r + 0.01, y_rt + 0.065, 0.09), PL(x0_r - 0.01, y_rt + 0.065, 0.09)],
+                   ridge_mat, uv_scale=0.5, include_bottom=False)
+
+        # Vertical rainwater downspout on one clear eave corner
+        ds_side = 1.0 if clear_zp >= clear_zn else -1.0
+        ds_clear = clear_zp if ds_side > 0 else clear_zn
+        ds_oz = oz_pos if ds_side > 0 else oz_neg
+        if ds_clear >= 0.9:
+            gutter_mat = "HouseBlack" if wall != "HouseBlack" else "HouseGrey"
+            ds_x = w * 0.5 - 0.14
+            ds_z = ds_side * (d * 0.5 + 0.04)
+            ds_y_top = h - slope * ds_oz + 0.02
+            add_box_uv(village,
+                       [PL(ds_x - 0.03, plinth_h + 0.04, ds_z - 0.03), PL(ds_x + 0.03, plinth_h + 0.04, ds_z - 0.03),
+                        PL(ds_x + 0.03, plinth_h + 0.04, ds_z + 0.03), PL(ds_x - 0.03, plinth_h + 0.04, ds_z + 0.03)],
+                       [PL(ds_x - 0.03, ds_y_top, ds_z - 0.03), PL(ds_x + 0.03, ds_y_top, ds_z - 0.03),
+                        PL(ds_x + 0.03, ds_y_top, ds_z + 0.03), PL(ds_x - 0.03, ds_y_top, ds_z + 0.03)],
+                       gutter_mat, uv_scale=0.5, include_bottom=True)
+            # Top elbow connecting gutter to wall pipe
+            ez0 = min(ds_z, ds_side * (d * 0.5 + ds_oz + 0.04))
+            ez1 = max(ds_z, ds_side * (d * 0.5 + ds_oz + 0.04))
+            add_box_uv(village,
+                       [PL(ds_x - 0.03, ds_y_top - 0.05, ez0), PL(ds_x + 0.03, ds_y_top - 0.05, ez0),
+                        PL(ds_x + 0.03, ds_y_top - 0.05, ez1), PL(ds_x - 0.03, ds_y_top - 0.05, ez1)],
+                       [PL(ds_x - 0.03, ds_y_top + 0.02, ez0), PL(ds_x + 0.03, ds_y_top + 0.02, ez0),
+                        PL(ds_x + 0.03, ds_y_top + 0.02, ez1), PL(ds_x - 0.03, ds_y_top + 0.02, ez1)],
+                       gutter_mat, uv_scale=0.5, include_bottom=True)
+
+        # 4. Corner Boards (quoins) and Gable-Base Trim Band
+        cb_w = 0.11
+        cb_p = 0.022
+        for sx in (-1.0, 1.0):
+            for sz in (-1.0, 1.0):
+                cx0 = sx * (w * 0.5 - cb_w * 0.5) - cb_w * 0.5
+                cx1 = cx0 + cb_w
+                cz0 = sz * (d * 0.5 - cb_w * 0.5) - cb_w * 0.5
+                cz1 = cz0 + cb_w
+                # Expand slightly outward beyond wall faces
+                if sx < 0:
+                    cx0 = -w * 0.5 - cb_p
+                else:
+                    cx1 = w * 0.5 + cb_p
+                if sz < 0:
+                    cz0 = -d * 0.5 - cb_p
+                else:
+                    cz1 = d * 0.5 + cb_p
+                add_box_uv(village,
+                           [PL(cx0, plinth_h, cz0), PL(cx1, plinth_h, cz0),
+                            PL(cx1, plinth_h, cz1), PL(cx0, plinth_h, cz1)],
+                           [PL(cx0, h + 0.02, cz0), PL(cx1, h + 0.02, cz0),
+                            PL(cx1, h + 0.02, cz1), PL(cx0, h + 0.02, cz1)],
+                           trim_mat, uv_scale=0.5, include_bottom=False)
+
+        for gx_s in (-1.0, 1.0):
+            bx0 = gx_s * (w * 0.5) - (0.025 if gx_s < 0 else 0.0)
+            bx1 = gx_s * (w * 0.5) + (0.025 if gx_s > 0 else 0.0)
+            add_box_uv(village,
+                       [PL(bx0, h - 0.02, -d * 0.5 - 0.02), PL(bx1, h - 0.02, -d * 0.5 - 0.02),
+                        PL(bx1, h - 0.02, d * 0.5 + 0.02), PL(bx0, h - 0.02, d * 0.5 + 0.02)],
+                       [PL(bx0, h + 0.06, -d * 0.5 - 0.02), PL(bx1, h + 0.06, -d * 0.5 - 0.02),
+                        PL(bx1, h + 0.06, d * 0.5 + 0.02), PL(bx0, h + 0.06, d * 0.5 + 0.02)],
+                       trim_mat, uv_scale=0.5, include_bottom=True)
+
+        # 5. Chimney Stack on residential houses
+        if kind not in ("shed", "boathouse", "industrial", "commercial", "garage", "service") and w >= 5.2 and d >= 4.2:
+            ch_x = w * 0.20 * (1.0 if b_idx % 2 == 0 else -1.0)
+            ch_z = -d * 0.14
+            ch_r = 0.25
+            ch_top = h + roof_h + 0.65
+            add_box_uv(village,
+                       [PL(ch_x - ch_r, h, ch_z - ch_r), PL(ch_x + ch_r, h, ch_z - ch_r),
+                        PL(ch_x + ch_r, h, ch_z + ch_r), PL(ch_x - ch_r, h, ch_z + ch_r)],
+                       [PL(ch_x - ch_r, ch_top, ch_z - ch_r), PL(ch_x + ch_r, ch_top, ch_z - ch_r),
+                        PL(ch_x + ch_r, ch_top, ch_z + ch_r), PL(ch_x - ch_r, ch_top, ch_z + ch_r)],
+                       "PortalConcrete", uv_scale=0.5, include_bottom=False)
+            # Chimney cap & flue pot
+            cap_r = ch_r + 0.05
+            add_box_uv(village,
+                       [PL(ch_x - cap_r, ch_top, ch_z - cap_r), PL(ch_x + cap_r, ch_top, ch_z - cap_r),
+                        PL(ch_x + cap_r, ch_top, ch_z + cap_r), PL(ch_x - cap_r, ch_top, ch_z + cap_r)],
+                       [PL(ch_x - cap_r, ch_top + 0.08, ch_z - cap_r), PL(ch_x + cap_r, ch_top + 0.08, ch_z - cap_r),
+                        PL(ch_x + cap_r, ch_top + 0.08, ch_z + cap_r), PL(ch_x - cap_r, ch_top + 0.08, ch_z + cap_r)],
+                       "HouseBlack", uv_scale=0.5, include_bottom=True)
+            add_box_uv(village,
+                       [PL(ch_x - 0.12, ch_top + 0.08, ch_z - 0.12), PL(ch_x + 0.12, ch_top + 0.08, ch_z - 0.12),
+                        PL(ch_x + 0.12, ch_top + 0.08, ch_z + 0.12), PL(ch_x - 0.12, ch_top + 0.08, ch_z + 0.12)],
+                       [PL(ch_x - 0.12, ch_top + 0.24, ch_z - 0.12), PL(ch_x + 0.12, ch_top + 0.24, ch_z - 0.12),
+                        PL(ch_x + 0.12, ch_top + 0.24, ch_z + 0.12), PL(ch_x - 0.12, ch_top + 0.24, ch_z + 0.12)],
+                       "HouseBlack", uv_scale=0.5, include_bottom=False)
+
+    # 6. Windows & Entrance Doors (unified across all 4 walls)
+    if not is_detailed:
+        if windows and w >= 5.5:
+            n_win = max(2, min(4, int(w / 3.2)))
+            wh = 1.05
+            ww = 0.85
+            wy0 = max(0.95, h * 0.38)
+            for side in (-1, 1):
+                lz = side * (d * 0.5 + 0.03)
+                wn = (side * s, 0.0, side * c)
+                for wi in range(n_win):
+                    lx = (w * 0.68) * ((wi + 0.5) / n_win - 0.5)
+                    lit = (kind not in ("shed", "boathouse", "garage", "service")) and ((b_idx * 37 + wi * 7) % 10 < 2)
+                    gmat = "HouseWindowLit" if lit else "HouseWindow"
+                    add_quad_uv(village, PL(lx - ww * 0.5, wy0, lz), PL(lx + ww * 0.5, wy0, lz),
+                                PL(lx + ww * 0.5, wy0 + wh, lz), PL(lx - ww * 0.5, wy0 + wh, lz),
+                                gmat, lambda q, wn=wn: wn, uv_scale=0.5)
+        return True
+
+    # Wall definitions: (key, ox, oz, tx, tz, nx, nz, span, clear)
+    walls = [
+        ("zp", 0.0, d * 0.5, 1.0, 0.0, 0.0, 1.0, w, clear_zp),
+        ("zn", 0.0, -d * 0.5, -1.0, 0.0, 0.0, -1.0, w, clear_zn),
+        ("xp", w * 0.5, 0.0, 0.0, -1.0, 1.0, 0.0, d, clear_xp),
+        ("xn", -w * 0.5, 0.0, 0.0, 1.0, -1.0, 0.0, d, clear_xn),
+    ]
+
+    def wall_world_pt(wdef, u_along, n_out=0.0):
+        _, ox, oz, tx, tz, nx, nz, _, _ = wdef
+        lx = ox + u_along * tx + n_out * nx
+        lz = oz + u_along * tz + n_out * nz
+        return P(lx, 0.0, lz)[0], P(lx, 0.0, lz)[2]
+
+    def add_wall_box(wdef, u0, u1, y0_w, y1_w, n0, n1, mat):
+        _, ox, oz, tx, tz, nx, nz, _, _ = wdef
+        WL = lambda u, y, n: PL(ox + u * tx + n * nx, y, oz + u * tz + n * nz)
+        add_box_uv(village,
+                   [WL(u0, y0_w, n0), WL(u1, y0_w, n0), WL(u1, y0_w, n1), WL(u0, y0_w, n1)],
+                   [WL(u0, y1_w, n0), WL(u1, y1_w, n0), WL(u1, y1_w, n1), WL(u0, y1_w, n1)],
+                   mat, uv_scale=0.5, include_bottom=True, include_top=True)
+
+    def add_detailed_window(wdef, u_c, wy0, ww, wh, gmat, shallow=False, mullions=True):
+        _, ox, oz, tx, tz, nx, nz, _, _ = wdef
+        WL = lambda u, y, n: PL(ox + u * tx + n * nx, y, oz + u * tz + n * nz)
+        wn = (nx * c + nz * s, 0.0, -nx * s + nz * c)
+        sc = 0.55 if shallow else 1.0
+        # Glass pane at +0.022m (no z-fighting with wall at 0)
+        n_glass = 0.020 * sc + 0.008
+        add_quad_uv(village, WL(u_c - ww * 0.5, wy0, n_glass), WL(u_c + ww * 0.5, wy0, n_glass),
+                    WL(u_c + ww * 0.5, wy0 + wh, n_glass), WL(u_c - ww * 0.5, wy0 + wh, n_glass),
+                    gmat, lambda q, wn=wn: wn, uv_scale=0.5)
+        # Jambs, bottom sill, and top lintel
+        jb = 0.052
+        add_wall_box(wdef, u_c - ww * 0.5 - jb, u_c - ww * 0.5 + 0.008, wy0, wy0 + wh, -0.01, 0.042 * sc + 0.008, trim_mat)
+        add_wall_box(wdef, u_c + ww * 0.5 - 0.008, u_c + ww * 0.5 + jb, wy0, wy0 + wh, -0.01, 0.042 * sc + 0.008, trim_mat)
+        add_wall_box(wdef, u_c - ww * 0.5 - 0.075, u_c + ww * 0.5 + 0.075, wy0 - 0.058, wy0 + 0.008, -0.01, 0.070 * sc + 0.008, trim_mat)
+        add_wall_box(wdef, u_c - ww * 0.5 - 0.065, u_c + ww * 0.5 + 0.065, wy0 + wh - 0.008, wy0 + wh + 0.058, -0.01, 0.056 * sc + 0.008, trim_mat)
+        if mullions:
+            add_wall_box(wdef, u_c - 0.020, u_c + 0.020, wy0, wy0 + wh, 0.012, 0.038 * sc + 0.008, trim_mat)
+            add_wall_box(wdef, u_c - ww * 0.5, u_c + ww * 0.5, wy0 + wh * 0.52, wy0 + wh * 0.52 + 0.036, 0.012, 0.038 * sc + 0.008, trim_mat)
+
+    def add_entrance_door(wdef, u_c, span, shallow=False):
+        _, ox, oz, tx, tz, nx, nz, _, _ = wdef
+        dw = min(0.92, span * 0.30)
+        dh = min(1.94, max(1.62, h - plinth_h - 0.16))
+        sc = 0.65 if shallow else 1.0
+        # Door panel + outer casing + lever handle
+        add_wall_box(wdef, u_c - dw * 0.5, u_c + dw * 0.5, plinth_h, plinth_h + dh, -0.005, 0.030, door_mat)
+        add_wall_box(wdef, u_c - dw * 0.5 - 0.07, u_c - dw * 0.5 + 0.01, plinth_h, plinth_h + dh, -0.01, 0.052 * sc, trim_mat)
+        add_wall_box(wdef, u_c + dw * 0.5 - 0.01, u_c + dw * 0.5 + 0.07, plinth_h, plinth_h + dh, -0.01, 0.052 * sc, trim_mat)
+        add_wall_box(wdef, u_c - dw * 0.5 - 0.075, u_c + dw * 0.5 + 0.075, plinth_h + dh - 0.01, plinth_h + dh + 0.07, -0.01, 0.058 * sc, trim_mat)
+        add_wall_box(wdef, u_c + dw * 0.25, u_c + dw * 0.40, plinth_h + dh * 0.47, plinth_h + dh * 0.505, 0.025, 0.058, "GuardrailMetal")
+
+        # Over-door protective canopy/hood (when eave clearance and road clearance allow)
+        wpx, wpz = wall_world_pt(wdef, u_c, 0.30)
+        road_clear = walkable_edge_clearance(wpx, wpz)
+        if not shallow and road_clear >= 0.45 and plinth_h + dh + 0.22 <= h:
+            cw = dw * 0.5 + 0.18
+            add_wall_box(wdef, u_c - cw, u_c + cw, plinth_h + dh + 0.05, plinth_h + dh + 0.11, -0.01, 0.26, trim_mat)
+            # Sloped roof cap on door hood
+            WL = lambda u, y, n: PL(ox + u * tx + n * nx, y, oz + u * tz + n * nz)
+            add_box_uv(village,
+                       [WL(u_c - cw - 0.02, plinth_h + dh + 0.11, -0.01),
+                        WL(u_c + cw + 0.02, plinth_h + dh + 0.11, -0.01),
+                        WL(u_c + cw + 0.02, plinth_h + dh + 0.09, 0.30),
+                        WL(u_c - cw - 0.02, plinth_h + dh + 0.09, 0.30)],
+                       [WL(u_c - cw - 0.02, plinth_h + dh + 0.22, -0.01),
+                        WL(u_c + cw + 0.02, plinth_h + dh + 0.22, -0.01),
+                        WL(u_c + cw + 0.02, plinth_h + dh + 0.13, 0.30),
+                        WL(u_c - cw - 0.02, plinth_h + dh + 0.13, 0.30)],
+                       roof, uv_scale=0.5, include_bottom=False)
+
+        # Warm porch lantern beside the door on residential houses
+        if kind not in ("shed", "boathouse", "garage", "service"):
+            u_lan = u_c - dw * 0.5 - 0.17
+            if abs(u_lan) <= span * 0.5 - 0.24:
+                ly_lan = min(h - 0.32, plinth_h + dh * 0.78)
+                add_wall_box(wdef, u_lan - 0.05, u_lan + 0.05, ly_lan, ly_lan + 0.14, 0.0, 0.095 * sc, "HouseWindowLit")
+                add_wall_box(wdef, u_lan - 0.065, u_lan + 0.065, ly_lan + 0.14, ly_lan + 0.175, -0.005, 0.11 * sc, "HouseBlack")
+
+        # Grounded stone steps where terrain drops below threshold and corridor/neighbor clearance allows
+        fx, fz = wall_world_pt(wdef, u_c, 0.55)
+        y_front = float(bil(H, fx, fz))
+        drop = (y0 + plinth_h) - y_front
+        sw = dw * 0.5 + 0.18
+        step_clear = all(
+            walkable_edge_clearance(*wall_world_pt(wdef, u_c + su * sw, 0.80)) >= 0.35
+            and neighbor_dist(b_idx, *wall_world_pt(wdef, u_c + su * sw, 0.80)) >= 0.35
+            for su in (-1.0, 0.0, 1.0)
+        )
+        y_bot = min(plinth_h - 0.55, y_front - y0 - 0.45)
+        if drop > 0.10 and step_clear and not shallow:
+            n_steps = min(3, max(1, int(math.ceil(drop / 0.24))))
+            step_drop = min(0.22, drop / n_steps)
+            for si in range(n_steps):
+                n0 = 0.0 if si == 0 else 0.36 + (si - 1) * 0.18
+                n1 = 0.36 + si * 0.18
+                y_top_s = plinth_h - 0.02 - si * step_drop
+                add_wall_box(wdef, u_c - sw, u_c + sw, y_bot, y_top_s, n0, n1, "PortalConcrete")
+        elif drop > 0.04 and walkable_edge_clearance(fx, fz) >= 0.22:
+            add_wall_box(wdef, u_c - sw * 0.85, u_c + sw * 0.85, y_bot, plinth_h - 0.02, 0.0, 0.14, "PortalConcrete")
+
+    # Select best exposed wall for entrance door (prefer closest to village street / footpaths)
+    door_wall_key = None
+    if h - plinth_h >= 1.80:
+        best_score = 1e9
+        for wdef in walls:
+            wkey, _, _, _, _, _, _, wspan, wclear = wdef
+            if wclear < 1.1 or wspan < 2.8:
+                continue
+            mx, mz = wall_world_pt(wdef, 0.0, 0.4)
+            rdist = road_or_path_distance(mx, mz)
+            eclear = walkable_edge_clearance(mx, mz)
+            # Slight preference for long walls and walls with safe step room
+            score = rdist + (0.9 if wspan == d else 0.0) + (2.5 if eclear < 0.6 else 0.0)
+            if score < best_score:
+                best_score = score
+                door_wall_key = wkey
+
+    # Populate each exposed wall with windows (and door on the chosen wall)
+    for w_idx, wdef in enumerate(walls):
+        wkey, _, _, _, _, _, _, wspan, wclear = wdef
+        if wclear < 1.1:
+            continue
+        is_gable = wkey in ("xp", "xn")
+        if not is_gable:
+            n_slots = 1 if wspan < 3.9 else (2 if wspan < 6.5 else (3 if wspan < 9.2 else 4))
+        else:
+            n_slots = 2 if wspan >= 4.8 else 1
+
+        mx, mz = wall_world_pt(wdef, 0.0, 0.1)
+        shallow_wall = walkable_edge_clearance(mx, mz) < 0.75
+
+        ww = min(0.82, (wspan * 0.68) / n_slots * 0.62)
+        wh = min(1.04, max(0.62, (h - plinth_h) * 0.43))
+        wy0 = plinth_h + max(0.50, (h - plinth_h - wh) * 0.46)
+        if wy0 + wh > h - 0.26:
+            wy0 = max(plinth_h + 0.35, h - 0.26 - wh)
+            if wy0 + wh > h - 0.22:
+                wh = max(0.45, h - 0.22 - wy0)
+
+        # Pick which slot becomes the entrance door on door_wall_key
+        door_slot = -1
+        if wkey == door_wall_key:
+            best_sd = 1e9
+            for si in range(n_slots):
+                su = (wspan * 0.68) * ((si + 0.5) / n_slots - 0.5)
+                sx_w, sz_w = wall_world_pt(wdef, su, 0.4)
+                sd = road_or_path_distance(sx_w, sz_w)
+                if sd < best_sd:
+                    best_sd = sd
+                    door_slot = si
+
+        for si in range(n_slots):
+            su = (wspan * 0.68) * ((si + 0.5) / n_slots - 0.5)
+            wx_w, wz_w = wall_world_pt(wdef, su, 0.05)
+            wx_out, wz_out = wall_world_pt(wdef, su, 0.60)
+            if neighbor_dist(b_idx, wx_w, wz_w) < 0.85 or neighbor_dist(b_idx, wx_out, wz_out) < 0.40:
+                continue
+            if si == door_slot:
+                add_entrance_door(wdef, su, wspan, shallow=shallow_wall)
+            else:
+                lit = (kind not in ("shed", "boathouse", "garage", "service")) and ((b_idx * 37 + w_idx * 13 + si * 7) % 10 < 3)
+                gmat = "HouseWindowLit" if lit else "HouseWindow"
+                add_detailed_window(wdef, su, wy0, ww, wh, gmat, shallow=shallow_wall, mullions=(ww >= 0.45))
+
+        # Gable attic window centered in the triangle above the tie-beam
+        if is_gable and roof_h >= 1.35 and wspan >= 3.4:
+            aww = min(0.68, wspan * 0.20)
+            max_tri_h = roof_h * (1.0 - aww / max(wspan, 0.5))
+            awh = min(0.78, max(0.45, max_tri_h * 0.46))
+            awy0 = h + max(0.18, max_tri_h * 0.14)
+            if awy0 + awh <= h + max_tri_h - 0.14:
+                lit_attic = (kind not in ("shed", "boathouse", "garage", "service")) and ((b_idx * 41 + w_idx * 19) % 10 < 2)
+                gmat_a = "HouseWindowLit" if lit_attic else "HouseWindow"
+                add_detailed_window(wdef, 0.0, awy0, aww, awh, gmat_a, shallow=shallow_wall, mullions=True)
+
+        # Downhill basement (kjallari) windows when slope exposes the foundation wall
+        if y0 - y_min > 0.85 and not is_gable and not shallow_wall:
+            nb_base = min(2, max(1, int(wspan / 4.2)))
+            for bi in range(nb_base):
+                bu = (wspan * 0.56) * ((bi + 0.5) / nb_base - 0.5)
+                fx_b, fz_b = wall_world_pt(wdef, bu, 0.15)
+                gy_b = float(bil(H, fx_b, fz_b))
+                if y0 - 0.45 - 0.22 > gy_b + 0.16 and neighbor_dist(b_idx, fx_b, fz_b) >= 0.90:
+                    add_detailed_window(wdef, bu, -0.52, 0.54, 0.38, "HouseWindow", shallow=False, mullions=True)
 
     return True
 
 
-walls_res = ["HouseBlack", "HouseWhite", "HouseBlack", "HouseGrey", "HouseRed", "HouseWhite"]
-roofs_res = ["RoofGrey", "RoofTurf", "RoofRed", "RoofBlack", "RoofTurf"]
+# Exact real-world Árnafjørður building colors keyed by OSM building index:
+# (wall_mat, roof_mat, trim_mat, plinth_mat, optional (h, roof_h) override)
+REAL_VILLAGE_HOUSES = {
+    # Near church
+    63: ("HouseBlack", "RoofBlack", "HouseBlack", "BasaltRock", None),
+    33: ("HouseWhite", "RoofBlack", "HouseWhite", "HouseGrey", None),
+    # West of road — bridge & river foreground
+    28: ("HouseWhite", "RoofBlack", "HouseWhite", "HouseGrey", (4.5, 2.05)),
+    37: ("HouseTimber", "RoofTurf", "HouseWhite", "PortalConcrete", (2.3, 1.45)),
+    22: ("HouseRed", "RoofBlack", "HouseWhite", "HouseGrey", (3.9, 2.20)),
+    42: ("HouseRed", "RoofBlack", "HouseWhite", "PortalConcrete", (2.8, 1.85)),
+    41: ("HouseBlack", "RoofBlack", "HouseBlack", "BasaltRock", (2.5, 1.55)),
+    23: ("HouseRed", "RoofBlack", "HouseWhite", "HouseGrey", (3.6, 2.10)),
+    64: ("HouseRed", "RoofTurf", "HouseWhite", "PortalConcrete", None),
+    65: ("HouseBlack", "RoofBlack", "HouseBlack", "BasaltRock", None),
+    # West of road — uphill & midground
+    67: ("HouseTimber", "RoofTurf", "HouseTimber", "BasaltRock", None),
+    66: ("HouseBlack", "RoofTurf", "HouseBlack", "BasaltRock", None),
+    25: ("HouseWhite", "RoofBlack", "HouseWhite", "HouseGrey", None),
+    24: ("HouseWhite", "RoofBlack", "HouseWhite", "HouseGrey", None),
+    26: ("HouseBlack", "RoofBlack", "HouseBlack", "BasaltRock", None),
+    43: ("HouseBlack", "RoofTurf", "HouseBlack", "BasaltRock", None),
+    20: ("HouseWhite", "RoofBlack", "HouseWhite", "HouseGrey", None),
+    19: ("HouseRed", "RoofBlack", "HouseWhite", "HouseGrey", None),
+    60: ("HouseWhite", "RoofBlack", "HouseWhite", "PortalConcrete", None),
+    # East of road — seafoam-teal house complex & beachside sheds
+    21: ("HouseTeal", "RoofBlack", "HouseWhite", "HouseGrey", (4.6, 2.20)),
+    38: ("HouseTeal", "RoofBlack", "HouseWhite", "HouseGrey", (2.6, 1.55)),
+    39: ("HouseTeal", "RoofBlack", "HouseWhite", "HouseGrey", (3.0, 1.70)),
+    17: ("HouseTeal", "RoofBlack", "HouseWhite", "HouseGrey", None),
+    36: ("HouseTimber", "RoofRed", "HouseTimber", "PortalConcrete", (2.4, 1.50)),
+    27: ("HouseTimber", "RoofTurf", "HouseTimber", "PortalConcrete", (2.8, 1.75)),
+    35: ("HouseBlack", "RoofTurf", "HouseBlack", "BasaltRock", (2.5, 1.55)),
+    34: ("HouseBlack", "RoofTurf", "HouseBlack", "BasaltRock", (2.6, 1.60)),
+    40: ("HouseBlack", "RoofBlack", "HouseBlack", "BasaltRock", None),
+    # East of road — white house with green roof, yellow cottage & black boathouses
+    18: ("HouseWhite", "RoofTurf", "HouseWhite", "HouseGrey", (3.7, 2.15)),
+    44: ("HouseYellow", "RoofBlack", "HouseWhite", "PortalConcrete", None),
+    69: ("HouseYellow", "RoofBlack", "HouseWhite", "PortalConcrete", None),
+    16: ("HouseBlack", "RoofBlack", "HouseBlack", "BasaltRock", None),
+    45: ("HouseBlack", "RoofBlack", "HouseBlack", "BasaltRock", None),
+    46: ("HouseBlack", "RoofBlack", "HouseBlack", "BasaltRock", None),
+    103: ("HouseBlack", "RoofBlack", "HouseBlack", "BasaltRock", None),
+    47: ("HouseBlack", "RoofBlack", "HouseBlack", "BasaltRock", None),
+    48: ("HouseBlack", "RoofBlack", "HouseBlack", "BasaltRock", None),
+    # Upper village road & shoreline
+    15: ("HouseRed", "RoofBlack", "HouseWhite", "HouseGrey", None),
+    14: ("HouseWhite", "RoofBlack", "HouseWhite", "HouseGrey", None),
+    13: ("HouseRed", "RoofBlack", "HouseWhite", "HouseGrey", None),
+    49: ("HouseRed", "RoofBlack", "HouseWhite", "HouseGrey", None),
+    70: ("HouseWhite", "RoofBlack", "HouseWhite", "HouseGrey", None),
+    12: ("HouseWhite", "RoofBlack", "HouseWhite", "HouseGrey", None),
+    11: ("HouseWhite", "RoofBlack", "HouseWhite", "HouseGrey", None),
+    71: ("HouseBlack", "RoofBlack", "HouseBlack", "BasaltRock", None),
+    50: ("HouseBlack", "RoofBlack", "HouseBlack", "BasaltRock", None),
+    # Northern village & harbour
+    51: ("HouseBlack", "RoofBlack", "HouseBlack", "BasaltRock", None),
+    10: ("HouseYellow", "RoofBlack", "HouseWhite", "HouseGrey", None),
+    74: ("HouseTeal", "RoofBlack", "HouseWhite", "PortalConcrete", None),
+    107: ("HouseWhite", "RoofGrey", "HouseWhite", "PortalConcrete", None),
+}
+# Buildings where the real-world roof ridge runs along the shorter side of the nearly-square footprint
+RIDGE_SWAP_INDICES = {22, 28}
+
+walls_res = ["HouseWhite", "HouseRed", "HouseBlack", "HouseWhite", "HouseBlack", "HouseTimber"]
+roofs_res = ["RoofBlack", "RoofBlack", "RoofTurf", "RoofBlack", "RoofGrey"]
 b_count = 0
 for idx, b in enumerate(osm["buildings"]):
     if b["kind"] == "construction":
         continue
     if b["kind"] == "church":
         house(b["x"], b["z"], b["yaw"], max(b["w"], 12.6), max(b["d"], 8.4), 4.6, 3.1,
-              "HouseWhite", "RoofRed", windows=True, is_church=True)
+              "HouseWhite", "RoofRed", windows=True, is_church=True, b_idx=idx, kind="church")
         b_count += 1
         continue
     w = max(b["w"], 3.5)
     d = max(b["d"], 3.5)
-    # Orient ridge along longer footprint axis cleanly
     yaw = b["yaw"]
     if d > w:
         w, d = d, w
         yaw += math.pi * 0.5
+    if idx in RIDGE_SWAP_INDICES:
+        w, d = d, w
+        yaw += math.pi * 0.5
     if b["z"] < 120.0:
-        # Upper hillside service/agricultural outbuildings: muted dark Faroese barns/sheds
         wall = "HouseBlack"
         roof = "RoofGrey" if idx % 2 == 0 else "RoofBlack"
         h = 2.1
         rh = 1.1
     elif b["kind"] in ("industrial", "commercial"):
-        wall = "HouseGrey" if idx % 2 == 0 else "HouseBlack"
-        roof = "RoofGrey"
+        wall = "HouseWhite" if idx % 3 == 0 else "HouseBlack"
+        roof = "RoofGrey" if idx % 2 == 0 else "RoofBlack"
         h = rng.uniform(4.2, 5.8)
         rh = rng.uniform(1.6, 2.3)
     elif b["kind"] == "boathouse":
-        wall = "HouseBlack" if idx % 3 != 0 else "HouseRed"
-        roof = "RoofTurf" if idx % 2 == 0 else "RoofGrey"
+        wall = "HouseBlack" if idx % 3 != 0 else "HouseTimber"
+        roof = "RoofTurf" if idx % 2 == 0 else "RoofBlack"
         h = rng.uniform(2.5, 3.2)
         rh = rng.uniform(1.6, 2.2)
     else:
@@ -1072,7 +1785,16 @@ for idx, b in enumerate(osm["buildings"]):
         roof = "RoofRed" if b.get("roof_color") == "red" else roofs_res[idx % len(roofs_res)]
         h = rng.uniform(3.2, 4.8) if max(w, d) > 8.5 else rng.uniform(2.4, 3.3)
         rh = rng.uniform(1.7, 2.5)
-    if house(b["x"], b["z"], yaw, w, d, h, rh, wall, roof, windows=(max(w, d) >= 7.0)):
+
+    trim_ov = None
+    plinth_ov = None
+    if idx in REAL_VILLAGE_HOUSES:
+        wall, roof, trim_ov, plinth_ov, h_ov = REAL_VILLAGE_HOUSES[idx]
+        if h_ov is not None:
+            h, rh = h_ov
+
+    if house(b["x"], b["z"], yaw, w, d, h, rh, wall, roof, windows=(max(w, d) >= 7.0),
+             b_idx=idx, kind=b["kind"], trim_override=trim_ov, plinth_override=plinth_ov):
         b_count += 1
 
 print("OSM buildings placed:", b_count)

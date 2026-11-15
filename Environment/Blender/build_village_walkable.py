@@ -1,7 +1,7 @@
 """
 Where the players may walk in the playable Árnafjørður village scene (Arnafjordur_Village.unity):
 the church driveway and parking bay, the road down over the Stórá bridge and through the village,
-three footpaths, and the beach at the head of the fjord. Everything else (the mountain road, the
+three footpaths, the grass between the houses below the street, and the beach at the head of the fjord. Everything else (the mountain road, the
 slopes, the sea) is left out, so the players cannot get there.
 
 Reads the terrain and road straight from TunnelExit.blend so the result always matches the
@@ -35,6 +35,9 @@ BEACH_X_MIN, BEACH_Z_MIN, BEACH_Z_MAX = 416.0, 309.0, 403.0
 BEACH_HOUSE_CLEARANCE = 1.6
 BEACH_RIVER_CLEARANCE = 6.5
 CELL = 0.5
+GRASS_X_MIN = 375.0            # the grass slope between the village street and the beach
+GRASS_HOUSE_CLEARANCE = 0.5    # houses have colliders; this only keeps the outline off their walls
+GRASS_ABOVE_ROAD = 0.4         # seaward ground up to this much above the street (the Unity builder banks it up to the road edge)
 
 
 # ------------------------------------------------------------------ meshes from the open .blend, in Unity coordinates
@@ -201,59 +204,6 @@ for iz, z in enumerate(zs):
         if mask[iz, ix] and (house_distance(x, z) < BEACH_HOUSE_CLEARANCE or line_distance(x, z, RIVER) < BEACH_RIVER_CLEARANCE):
             mask[iz, ix] = False
 
-# keep the piece the south footpath arrives on
-seed = (int(round((317.5 - zs[0]) / CELL)), int(round((430.0 - xs[0]) / CELL)))
-if not mask[seed]:
-    raise SystemExit("beach seed is not on the beach - move BeachPathSouth's last point")
-comp = np.zeros_like(mask)
-stack = [seed]
-comp[seed] = True
-while stack:
-    iz, ix = stack.pop()
-    for dz, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-        jz, jx = iz + dz, ix + dx
-        if 0 <= jz < mask.shape[0] and 0 <= jx < mask.shape[1] and mask[jz, jx] and not comp[jz, jx]:
-            comp[jz, jx] = True
-            stack.append((jz, jx))
-
-# fill holes so the outline is one loop
-outside = np.zeros_like(comp)
-pad = np.pad(comp, 1)
-seen = np.zeros_like(pad)
-stack = [(0, 0)]
-seen[0, 0] = True
-while stack:
-    iz, ix = stack.pop()
-    for dz, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-        jz, jx = iz + dz, ix + dx
-        if 0 <= jz < pad.shape[0] and 0 <= jx < pad.shape[1] and not pad[jz, jx] and not seen[jz, jx]:
-            seen[jz, jx] = True
-            stack.append((jz, jx))
-comp = ~seen[1:-1, 1:-1]
-
-# trace the outline: directed cell edges with the beach on the left, chained into one loop
-edges = {}
-for iz in range(comp.shape[0]):
-    for ix in range(comp.shape[1]):
-        if not comp[iz, ix]:
-            continue
-        if iz == 0 or not comp[iz - 1, ix]:
-            edges[(ix, iz)] = (ix + 1, iz)
-        if ix == comp.shape[1] - 1 or not comp[iz, ix + 1]:
-            edges[(ix + 1, iz)] = (ix + 1, iz + 1)
-        if iz == comp.shape[0] - 1 or not comp[iz + 1, ix]:
-            edges[(ix + 1, iz + 1)] = (ix, iz + 1)
-        if ix == 0 or not comp[iz, ix - 1]:
-            edges[(ix, iz + 1)] = (ix, iz)
-start = next(iter(edges))
-loop = [start]
-cur = edges[start]
-while cur != start:
-    loop.append(cur)
-    cur = edges[cur]
-outline = [(xs[0] - CELL * 0.5 + ix * CELL, zs[0] - CELL * 0.5 + iz * CELL) for ix, iz in loop]
-
-
 def simplify(pts, tol):
     if len(pts) < 3:
         return pts
@@ -268,9 +218,81 @@ def simplify(pts, tol):
     return simplify(pts[:wi + 1], tol)[:-1] + simplify(pts[wi:], tol)
 
 
-far = max(range(len(outline)), key=lambda i: math.hypot(outline[i][0] - outline[0][0], outline[i][1] - outline[0][1]))
-beach = simplify(outline[:far + 1], 0.45)[:-1] + simplify(outline[far:] + [outline[0]], 0.45)[:-1]
-area = 0.5 * abs(sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(beach, beach[1:] + beach[:1])))
+def zone_outline(mask, xs, zs, seed_xz):
+    """Connected piece of mask around seed_xz, holes filled, as a simplified outline loop."""
+    seed = (int(round((seed_xz[1] - zs[0]) / CELL)), int(round((seed_xz[0] - xs[0]) / CELL)))
+    if not mask[seed]:
+        raise SystemExit(f"zone seed {seed_xz} is not inside its mask")
+    comp = np.zeros_like(mask)
+    stack = [seed]
+    comp[seed] = True
+    while stack:
+        iz, ix = stack.pop()
+        for dz, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            jz, jx = iz + dz, ix + dx
+            if 0 <= jz < mask.shape[0] and 0 <= jx < mask.shape[1] and mask[jz, jx] and not comp[jz, jx]:
+                comp[jz, jx] = True
+                stack.append((jz, jx))
+    # fill holes so the outline is one loop
+    pad = np.pad(comp, 1)
+    seen = np.zeros_like(pad)
+    stack = [(0, 0)]
+    seen[0, 0] = True
+    while stack:
+        iz, ix = stack.pop()
+        for dz, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            jz, jx = iz + dz, ix + dx
+            if 0 <= jz < pad.shape[0] and 0 <= jx < pad.shape[1] and not pad[jz, jx] and not seen[jz, jx]:
+                seen[jz, jx] = True
+                stack.append((jz, jx))
+    comp = ~seen[1:-1, 1:-1]
+    # trace the outline: directed cell edges with the zone on the left, chained into one loop
+    edges = {}
+    for iz in range(comp.shape[0]):
+        for ix in range(comp.shape[1]):
+            if not comp[iz, ix]:
+                continue
+            if iz == 0 or not comp[iz - 1, ix]:
+                edges[(ix, iz)] = (ix + 1, iz)
+            if ix == comp.shape[1] - 1 or not comp[iz, ix + 1]:
+                edges[(ix + 1, iz)] = (ix + 1, iz + 1)
+            if iz == comp.shape[0] - 1 or not comp[iz + 1, ix]:
+                edges[(ix + 1, iz + 1)] = (ix, iz + 1)
+            if ix == 0 or not comp[iz, ix - 1]:
+                edges[(ix, iz + 1)] = (ix, iz)
+    start = next(iter(edges))
+    loop = [start]
+    cur = edges[start]
+    while cur != start:
+        loop.append(cur)
+        cur = edges[cur]
+    outline = [(xs[0] - CELL * 0.5 + ix * CELL, zs[0] - CELL * 0.5 + iz * CELL) for ix, iz in loop]
+    far = max(range(len(outline)), key=lambda i: math.hypot(outline[i][0] - outline[0][0], outline[i][1] - outline[0][1]))
+    pts = simplify(outline[:far + 1], 0.45)[:-1] + simplify(outline[far:] + [outline[0]], 0.45)[:-1]
+    return pts, 0.5 * abs(sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(pts, pts[1:] + pts[:1])))
+
+
+# keep the piece the south footpath arrives on
+beach, area = zone_outline(mask, xs, zs, (430.0, 317.5))
+
+# ------------------------------------------------------------------ 5. the grass between the houses below the street, down to the beach
+road_pts = np.array([(x, z, road_y(x, z)) for x, z in densify(road_line, 1.0)])
+gxs = np.arange(GRASS_X_MIN, 470.0 + CELL, CELL)
+Gg = np.array([[terrain_y(x, z) - SEA for x in gxs] for z in zs])
+gmask = Gg >= BEACH_MIN_H
+ggz, ggx = np.gradient(Gg, CELL)
+gmask &= np.hypot(ggx, ggz) < math.tan(math.radians(32.0))
+for iz, z in enumerate(zs):
+    for ix, x in enumerate(gxs):
+        if not gmask[iz, ix]:
+            continue
+        k = int(np.argmin((road_pts[:, 0] - x) ** 2 + (road_pts[:, 1] - z) ** 2))
+        a, b = road_pts[max(k - 1, 0)], road_pts[min(k + 1, len(road_pts) - 1)]
+        seaward = (b[1] - a[1]) * (x - a[0]) - (b[0] - a[0]) * (z - a[1]) > 0.0   # right of the street, heading north
+        if (not seaward or Gg[iz, ix] + SEA > road_pts[k, 2] + GRASS_ABOVE_ROAD or house_distance(x, z) < GRASS_HOUSE_CLEARANCE
+                or line_distance(x, z, RIVER) < BEACH_RIVER_CLEARANCE):
+            gmask[iz, ix] = False
+grass, grass_area = zone_outline(gmask, gxs, zs, (430.0, 317.5))
 
 data = {
     "seaLevel": SEA,
@@ -286,6 +308,7 @@ data = {
     ],
     "zones": [
         {"name": "Beach", "outline": with_height(beach, terrain_y)},
+        {"name": "VillageGrass", "outline": with_height(grass, terrain_y)},
     ],
     "houses": [{"x": round(a, 2), "z": round(b, 2), "yaw": round(c, 4), "halfWidth": round(d, 2), "halfDepth": round(e, 2)}
                for a, b, c, d, e in HOUSES],
@@ -294,4 +317,4 @@ out_path = os.path.join(OUT, "VillageWalkable.json")
 with open(out_path, "w", encoding="utf-8") as fh:
     json.dump(data, fh, indent=1)
 print(f"Village walkable: road {len(road)} pts, driveway {len(driveway)}, bay {len(bay)}, "
-      f"beach {len(beach)} corners / {area:.0f} m2, {len(HOUSES)} houses -> {out_path}")
+      f"beach {len(beach)} corners / {area:.0f} m2, grass {len(grass)} corners / {grass_area:.0f} m2, {len(HOUSES)} houses -> {out_path}")

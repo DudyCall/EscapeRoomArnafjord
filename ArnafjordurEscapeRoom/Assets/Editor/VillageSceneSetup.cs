@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Arnafjordur.Characters;
+using Arnafjordur.Core;
 using Arnafjordur.Intro;
 using Arnafjordur.UI;
 using UnityEditor;
@@ -134,12 +135,15 @@ namespace Arnafjordur.Editor
                 return;
             }
 
-            ConfigureParkedCar(carGo);
+            WalkableFile walkableData = JsonUtility.FromJson<WalkableFile>(File.ReadAllText(WalkableJsonPath));
+            ConfigureParkedCar(carGo, walkableData.seaLevel);
             EnsureBuildingColliders();
             Physics.SyncTransforms();
 
-            WalkableFile walkableData = JsonUtility.FromJson<WalkableFile>(File.ReadAllText(WalkableJsonPath));
             BuildBeach(walkableData);
+            FitTerrainUnderVillageRoads(walkableData);
+            BuildShoreRocks(walkableData.seaLevel);
+            SeaMineBomb seaMine = BuildSeaMineBomb(walkableData.seaLevel);
             Physics.SyncTransforms();
             var walkableArea = BuildWalkableAndFootpaths(walkableData);
             FjordWaterSetup.ApplyToExisting();
@@ -150,12 +154,15 @@ namespace Arnafjordur.Editor
                 return;
             }
 
-            SetupCameraPartyAndHud(cam, motors, walkableArea.gameObject);
+            SetupCameraPartyAndHud(cam, motors, walkableArea.gameObject, seaMine);
 
             EditorSceneManager.MarkSceneDirty(scene);
             EditorSceneManager.SaveScene(scene, ScenePath);
 
             VerifyWalkableConstraints(walkableArea, walkableData, motors);
+            VerifyDrunkProgression(motors, cam);
+            VerifyFishingRod(carGo, motors, cam);
+            VerifySeaMineBomb(seaMine, motors, cam);
             RenderPreviewFrames(cam, motors);
 
             var buildScenes = EditorBuildSettings.scenes.ToList();
@@ -172,7 +179,7 @@ namespace Arnafjordur.Editor
             Debug.Log($"[VillageSceneSetup] OK saved {ScenePath} ({walkableArea.Corridors.Length} corridors, {walkableArea.Zones.Length} zones, {motors.Length} players)");
         }
 
-        private static void ConfigureParkedCar(GameObject carGo)
+        private static void ConfigureParkedCar(GameObject carGo, float seaLevel)
         {
             Transform lights = carGo.transform.Find("Lights");
             if (lights != null)
@@ -180,9 +187,14 @@ namespace Arnafjordur.Editor
                 lights.gameObject.SetActive(false);
             }
 
-            Transform bodyTransform = carGo.transform.Find("VWGolf/Body");
-            if (bodyTransform != null && bodyTransform.TryGetComponent(out MeshRenderer body))
+            foreach (string part in new[] { "VWGolf/Body", "VWGolf/Tailgate" })
             {
+                Transform bodyTransform = carGo.transform.Find(part);
+                if (bodyTransform == null || !bodyTransform.TryGetComponent(out MeshRenderer body))
+                {
+                    continue;
+                }
+
                 Material[] mats = body.sharedMaterials;
                 for (int i = 0; i < mats.Length; i++)
                 {
@@ -204,6 +216,23 @@ namespace Arnafjordur.Editor
             }
 
             Transform golf = carGo.transform.Find("VWGolf");
+            Transform tailgate = golf != null ? golf.Find("Tailgate") : null;
+            if (tailgate != null && tailgate.TryGetComponent(out MeshFilter tailMesh))
+            {
+                // Click target for opening the trunk; a trigger, so it never blocks walking or the camera.
+                var click = GetOrAdd<BoxCollider>(tailgate.gameObject);
+                click.isTrigger = true;
+                click.center = tailMesh.sharedMesh.bounds.center;
+                click.size = tailMesh.sharedMesh.bounds.size;
+                var trunk = GetOrAdd<CarTrunk>(tailgate.gameObject);
+                trunk.Configure(new[] { BuildBeerBox(golf), BuildRadio(golf), BuildFishingRod(golf, seaLevel) });
+                EditorUtility.SetDirty(trunk);
+            }
+            else
+            {
+                Debug.LogWarning("[VillageSceneSetup] VWGolf has no Tailgate - re-export VWGolf.fbx from build_golf.py, then rerun the Golf setup steps.");
+            }
+
             if (golf != null)
             {
                 Transform existingObs = golf.Find("CarObstacle");
@@ -221,6 +250,288 @@ namespace Arnafjordur.Editor
                 capsule.height = 3.8f;
                 capsule.direction = 2;
             }
+        }
+
+        /// <summary>
+        /// A cardboard crate of twelve brown bottles on the Golf's boot floor (build_golf.py: top at y=0.55,
+        /// centred 1.66 m behind the car origin). Carried by its top handle.
+        /// </summary>
+        private static PickupItem BuildBeerBox(Transform golf)
+        {
+            Transform old = golf.Find("BeerBox");
+            if (old != null)
+            {
+                UnityEngine.Object.DestroyImmediate(old.gameObject);
+            }
+
+            const string dir = "Assets/Props/Beer";
+            Material card = BoxMaterial($"{dir}/Mat_BeerBox_Cardboard.mat", "#9C7246", 0.15f);
+            Material band = BoxMaterial($"{dir}/Mat_BeerBox_Label.mat", "#1F4E8C", 0.3f);
+            Material glass = AssetDatabase.LoadAssetAtPath<Material>($"{dir}/Mat_Beer_Glass.mat") ?? BoxMaterial($"{dir}/Mat_Beer_Glass.mat", "#4A2A0C", 0.88f);
+            Material cap = AssetDatabase.LoadAssetAtPath<Material>($"{dir}/Mat_Beer_Cap.mat") ?? BoxMaterial($"{dir}/Mat_Beer_Cap.mat", "#C9A227", 0.7f);
+
+            const float w = 0.40f, d = 0.27f, h = 0.24f;
+            var root = new GameObject("BeerBox").transform;
+            root.SetParent(golf, false);
+            root.localPosition = new Vector3(0f, 0.55f + h * 0.5f, -1.66f);
+            root.localRotation = Quaternion.identity;
+
+            BoxPart(PrimitiveType.Cube, "Crate", root, Vector3.zero, new Vector3(w, h, d), card);
+            BoxPart(PrimitiveType.Cube, "LabelL", root, new Vector3(-w * 0.5f - 0.001f, 0f, 0f), new Vector3(0.002f, h * 0.35f, d * 0.8f), band);
+            BoxPart(PrimitiveType.Cube, "LabelR", root, new Vector3(w * 0.5f + 0.001f, 0f, 0f), new Vector3(0.002f, h * 0.35f, d * 0.8f), band);
+            BoxPart(PrimitiveType.Cube, "LabelB", root, new Vector3(0f, 0f, -d * 0.5f - 0.001f), new Vector3(w * 0.8f, h * 0.35f, 0.002f), band);
+            BoxPart(PrimitiveType.Cube, "LabelF", root, new Vector3(0f, 0f, d * 0.5f + 0.001f), new Vector3(w * 0.8f, h * 0.35f, 0.002f), band);
+            BoxPart(PrimitiveType.Cube, "Handle", root, new Vector3(0f, h * 0.5f + 0.05f, 0f), new Vector3(0.03f, 0.10f, d * 0.95f), card);
+            var tops = new List<GameObject>();
+            for (int ix = 0; ix < 4; ix++)
+            {
+                for (int iz = 0; iz < 3; iz++)
+                {
+                    float x = (ix - 1.5f) * (w / 4f), z = (iz - 1f) * (d / 3f);
+                    var top = new GameObject($"Bottle_{tops.Count}").transform;
+                    top.SetParent(root, false);
+                    top.localPosition = new Vector3(x, h * 0.5f, z);
+                    BoxPart(PrimitiveType.Cylinder, "Neck", top, new Vector3(0f, 0.03f, 0f), new Vector3(0.028f, 0.03f, 0.028f), glass);
+                    BoxPart(PrimitiveType.Cylinder, "Cap", top, new Vector3(0f, 0.063f, 0f), new Vector3(0.03f, 0.004f, 0.03f), cap);
+                    tops.Add(top.gameObject);
+                }
+            }
+
+            // Every beer taken from the box is a copy of the players' own bottle, kept hidden in the box.
+            Transform carBeer = golf.root.GetComponentsInChildren<Transform>(true).FirstOrDefault(t => t.name == "Beer" && t.GetComponent<PickupItem>() != null);
+            PickupItem template = null;
+            if (carBeer != null)
+            {
+                var copy = UnityEngine.Object.Instantiate(carBeer.gameObject, root, false);
+                copy.name = "BeerTemplate";
+                copy.transform.localPosition = Vector3.zero;
+                copy.transform.localRotation = Quaternion.identity;
+                copy.transform.localScale = carBeer.lossyScale;
+                foreach (var extra in copy.GetComponentsInChildren<Component>(true).Where(c => !(c is Transform || c is MeshFilter || c is MeshRenderer || c is Collider || c is PickupItem)).ToArray())
+                {
+                    UnityEngine.Object.DestroyImmediate(extra);
+                }
+                template = copy.GetComponent<PickupItem>();
+                copy.SetActive(false);
+            }
+            else
+            {
+                Debug.LogWarning("[VillageSceneSetup] no player beer found to copy - the beer box will not hand out beers.");
+            }
+
+            var trigger = root.gameObject.AddComponent<BoxCollider>();
+            trigger.isTrigger = true;
+            trigger.center = new Vector3(0f, 0.04f, 0f);
+            trigger.size = new Vector3(w, h + 0.1f, d);
+
+            var item = root.gameObject.AddComponent<PickupItem>();
+            item.Configure("Beer box", -(h * 0.5f + 0.08f), h * 0.5f, true, "Use", false);   // fist in the top handle
+            EditorUtility.SetDirty(item);
+            var crate = root.gameObject.AddComponent<BeerCrate>();
+            crate.Configure(template, tops.ToArray());
+            EditorUtility.SetDirty(crate);
+            return item;
+        }
+
+        /// <summary>
+        /// A portable boombox beside the beer box in the trunk. Its playlist is every AudioClip in
+        /// Assets/Audio/Radio/ (empty for now), so new songs only need dropping there and a village rebuild.
+        /// </summary>
+        private static PickupItem BuildRadio(Transform golf)
+        {
+            Transform old = golf.Find("Radio");
+            if (old != null)
+            {
+                UnityEngine.Object.DestroyImmediate(old.gameObject);
+            }
+
+            const string dir = "Assets/Props/Radio";
+            const string songDir = "Assets/Audio/Radio";
+            Directory.CreateDirectory(dir);
+            Directory.CreateDirectory(songDir);
+            AssetDatabase.Refresh();
+            Material shell = BoxMaterial($"{dir}/Mat_Radio_Shell.mat", "#2B2E33", 0.35f);
+            Material grille = BoxMaterial($"{dir}/Mat_Radio_Grille.mat", "#111214", 0.1f);
+            Material trim = BoxMaterial($"{dir}/Mat_Radio_Trim.mat", "#B8BCC2", 0.75f);
+            Material dial = BoxMaterial($"{dir}/Mat_Radio_Dial.mat", "#E0A43A", 0.5f);
+
+            const float w = 0.30f, h = 0.17f, d = 0.10f;
+            var root = new GameObject("Radio").transform;
+            root.SetParent(golf, false);
+            root.localPosition = new Vector3(-0.36f, 0.55f + h * 0.5f, -1.66f);
+            root.localRotation = Quaternion.identity;   // speakers face out of the trunk (-Z)
+
+            BoxPart(PrimitiveType.Cube, "Body", root, Vector3.zero, new Vector3(w, h, d), shell);
+            foreach (float sx in new[] { -0.085f, 0.085f })
+            {
+                var speaker = new GameObject("Speaker").transform;
+                speaker.SetParent(root, false);
+                speaker.localPosition = new Vector3(sx, -0.01f, -d * 0.5f - 0.003f);
+                speaker.localRotation = Quaternion.Euler(90f, 0f, 0f);
+                BoxPart(PrimitiveType.Cylinder, "Ring", speaker, Vector3.zero, new Vector3(0.105f, 0.004f, 0.105f), trim);
+                BoxPart(PrimitiveType.Cylinder, "Cone", speaker, new Vector3(0f, -0.002f, 0f), new Vector3(0.09f, 0.004f, 0.09f), grille);
+            }
+            BoxPart(PrimitiveType.Cube, "Display", root, new Vector3(0f, 0.05f, -d * 0.5f - 0.002f), new Vector3(0.07f, 0.03f, 0.004f), dial);
+            BoxPart(PrimitiveType.Cube, "Handle", root, new Vector3(0f, h * 0.5f + 0.035f, 0f), new Vector3(w * 0.8f, 0.012f, 0.02f), trim);
+            foreach (float sx in new[] { -w * 0.38f, w * 0.38f })
+            {
+                BoxPart(PrimitiveType.Cube, "HandlePost", root, new Vector3(sx, h * 0.5f + 0.017f, 0f), new Vector3(0.012f, 0.035f, 0.02f), trim);
+            }
+            BoxPart(PrimitiveType.Cube, "Antenna", root, new Vector3(w * 0.42f, h * 0.5f + 0.09f, 0.02f), new Vector3(0.006f, 0.18f, 0.006f), trim);
+
+            var trigger = root.gameObject.AddComponent<BoxCollider>();
+            trigger.isTrigger = true;
+            trigger.center = new Vector3(0f, 0.03f, 0f);
+            trigger.size = new Vector3(w, h + 0.07f, d + 0.04f);
+
+            root.gameObject.AddComponent<AudioSource>();
+            var radio = root.gameObject.AddComponent<RadioPlayer>();
+            AudioClip[] songs = AssetDatabase.FindAssets("t:AudioClip", new[] { songDir })
+                .Select(g => AssetDatabase.LoadAssetAtPath<AudioClip>(AssetDatabase.GUIDToAssetPath(g)))
+                .Where(c => c != null).OrderBy(c => c.name).ToArray();
+            radio.Configure(songs);
+            EditorUtility.SetDirty(radio);
+
+            var item = root.gameObject.AddComponent<PickupItem>();
+            item.Configure("Radio", -(h * 0.5f + 0.035f), h * 0.5f, true, "Play", false);   // fist on the top handle
+            EditorUtility.SetDirty(item);
+            return item;
+        }
+
+        /// <summary>
+        /// A telescopic spinning rod resting beside the beer box in the trunk; collapses to fit inside
+        /// the boot while stowed, extends when picked up, and casts a bobber into the fjord or river.
+        /// </summary>
+        private static PickupItem BuildFishingRod(Transform golf, float seaLevel)
+        {
+            Transform old = golf.Find("FishingRod");
+            if (old != null)
+            {
+                UnityEngine.Object.DestroyImmediate(old.gameObject);
+            }
+
+            const string dir = "Assets/Props/FishingRod";
+            Directory.CreateDirectory(dir);
+            AssetDatabase.Refresh();
+            Material cork = BoxMaterial($"{dir}/Mat_FishingRod_Cork.mat", "#B5895A", 0.22f);
+            Material graphite = BoxMaterial($"{dir}/Mat_FishingRod_Graphite.mat", "#1D262D", 0.68f);
+            Material metal = BoxMaterial($"{dir}/Mat_FishingRod_Metal.mat", "#B8BCC2", 0.78f);
+            Material spool = BoxMaterial($"{dir}/Mat_FishingRod_Spool.mat", "#C9A227", 0.65f);
+            Material floatRed = BoxMaterial($"{dir}/Mat_FishingRod_FloatRed.mat", "#D15A32", 0.55f);
+            Material floatWhite = BoxMaterial($"{dir}/Mat_FishingRod_FloatWhite.mat", "#EDEAE2", 0.55f);
+            Material fishMat = BoxMaterial($"{dir}/Mat_FishingRod_Fish.mat", "#6E828F", 0.72f);
+            Material lineMat = BoxMaterial($"{dir}/Mat_FishingRod_Line.mat", "#D8E0E5", 0.40f);
+
+            var root = new GameObject("FishingRod").transform;
+            root.SetParent(golf, false);
+            root.localPosition = new Vector3(0.32f, 0.585f, -1.66f);
+            root.localRotation = Quaternion.identity;
+
+            var rodRig = new GameObject("RodRig").transform;
+            rodRig.SetParent(root, false);
+
+            BoxPart(PrimitiveType.Cylinder, "ButtCap", rodRig, new Vector3(0f, -0.105f, 0f), new Vector3(0.026f, 0.015f, 0.026f), metal);
+            BoxPart(PrimitiveType.Cylinder, "CorkRearGrip", rodRig, new Vector3(0f, -0.045f, 0f), new Vector3(0.024f, 0.045f, 0.024f), cork);
+            BoxPart(PrimitiveType.Cylinder, "ReelSeat", rodRig, new Vector3(0f, 0.025f, 0f), new Vector3(0.022f, 0.025f, 0.022f), metal);
+            BoxPart(PrimitiveType.Cylinder, "CorkForeGrip", rodRig, new Vector3(0f, 0.075f, 0f), new Vector3(0.023f, 0.025f, 0.023f), cork);
+
+            // Spinning reel under/ahead of the grip (-X becomes downward/forward when carried at +46 deg).
+            BoxPart(PrimitiveType.Cube, "ReelArm", rodRig, new Vector3(-0.028f, 0.025f, 0f), new Vector3(0.045f, 0.014f, 0.014f), graphite);
+            BoxPart(PrimitiveType.Cube, "ReelBody", rodRig, new Vector3(-0.052f, 0.025f, 0f), new Vector3(0.036f, 0.044f, 0.034f), graphite);
+            BoxPart(PrimitiveType.Cylinder, "ReelSpool", rodRig, new Vector3(-0.052f, 0.055f, 0f), new Vector3(0.034f, 0.016f, 0.034f), spool);
+
+            var reelCrank = new GameObject("ReelCrank").transform;
+            reelCrank.SetParent(rodRig, false);
+            reelCrank.localPosition = new Vector3(-0.052f, 0.020f, 0.020f);
+            BoxPart(PrimitiveType.Cube, "CrankArm", reelCrank, new Vector3(0f, -0.012f, 0f), new Vector3(0.006f, 0.028f, 0.006f), metal);
+            var knob = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            knob.name = "CrankKnob";
+            UnityEngine.Object.DestroyImmediate(knob.GetComponent<Collider>());
+            knob.transform.SetParent(reelCrank, false);
+            knob.transform.localPosition = new Vector3(0f, -0.025f, 0.008f);
+            knob.transform.localRotation = Quaternion.Euler(90f, 0f, 0f);
+            knob.transform.localScale = new Vector3(0.010f, 0.008f, 0.010f);
+            knob.GetComponent<MeshRenderer>().sharedMaterial = cork;
+
+            BoxPart(PrimitiveType.Cylinder, "LowerBlank", rodRig, new Vector3(0f, 0.30f, 0f), new Vector3(0.015f, 0.20f, 0.015f), graphite);
+            BoxPart(PrimitiveType.Cylinder, "Guide0", rodRig, new Vector3(-0.014f, 0.48f, 0f), new Vector3(0.020f, 0.003f, 0.020f), metal);
+
+            var telescopic = new GameObject("TelescopicSection").transform;
+            telescopic.SetParent(rodRig, false);
+            telescopic.localPosition = new Vector3(0f, 0.50f, 0f);
+            BoxPart(PrimitiveType.Cylinder, "UpperBlank", telescopic, new Vector3(0f, 0.26f, 0f), new Vector3(0.010f, 0.26f, 0.010f), graphite);
+            BoxPart(PrimitiveType.Cylinder, "TipBlank", telescopic, new Vector3(0f, 0.73f, 0f), new Vector3(0.006f, 0.23f, 0.006f), graphite);
+            BoxPart(PrimitiveType.Cylinder, "Guide1", telescopic, new Vector3(-0.011f, 0.22f, 0f), new Vector3(0.015f, 0.003f, 0.015f), metal);
+            BoxPart(PrimitiveType.Cylinder, "Guide2", telescopic, new Vector3(-0.009f, 0.46f, 0f), new Vector3(0.013f, 0.003f, 0.013f), metal);
+            BoxPart(PrimitiveType.Cylinder, "Guide3", telescopic, new Vector3(-0.007f, 0.70f, 0f), new Vector3(0.011f, 0.003f, 0.011f), metal);
+            BoxPart(PrimitiveType.Cylinder, "Guide4", telescopic, new Vector3(-0.005f, 0.955f, 0f), new Vector3(0.009f, 0.003f, 0.009f), metal);
+
+            var rodTip = new GameObject("RodTip").transform;
+            rodTip.SetParent(telescopic, false);
+            rodTip.localPosition = new Vector3(0f, 0.96f, 0f);
+
+            var bobber = new GameObject("Bobber").transform;
+            bobber.SetParent(root, false);
+            BoxPart(PrimitiveType.Sphere, "FloatRed", bobber, new Vector3(0f, 0.016f, 0f), new Vector3(0.032f, 0.036f, 0.032f), floatRed);
+            BoxPart(PrimitiveType.Sphere, "FloatWhite", bobber, new Vector3(0f, -0.012f, 0f), new Vector3(0.030f, 0.034f, 0.030f), floatWhite);
+            BoxPart(PrimitiveType.Cylinder, "Antenna", bobber, new Vector3(0f, 0.040f, 0f), new Vector3(0.005f, 0.015f, 0.005f), floatRed);
+            BoxPart(PrimitiveType.Sphere, "Sinker", bobber, new Vector3(0f, -0.065f, 0f), new Vector3(0.014f, 0.018f, 0.014f), metal);
+
+            var caughtFish = new GameObject("CaughtFish").transform;
+            caughtFish.SetParent(bobber, false);
+            BoxPart(PrimitiveType.Sphere, "FishBody", caughtFish, new Vector3(0f, -0.10f, 0f), new Vector3(0.055f, 0.22f, 0.095f), fishMat);
+            BoxPart(PrimitiveType.Cube, "FishTail", caughtFish, new Vector3(0f, -0.22f, 0f), new Vector3(0.014f, 0.065f, 0.065f), fishMat);
+            BoxPart(PrimitiveType.Cube, "DorsalFin", caughtFish, new Vector3(0f, -0.10f, -0.05f), new Vector3(0.010f, 0.075f, 0.045f), fishMat);
+            caughtFish.gameObject.SetActive(false);
+
+            var line = root.gameObject.AddComponent<LineRenderer>();
+            line.widthMultiplier = 0.004f;
+            line.useWorldSpace = true;
+            line.positionCount = 8;
+            line.sharedMaterial = lineMat;
+            line.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+
+            var trigger = root.gameObject.AddComponent<BoxCollider>();
+            trigger.isTrigger = true;
+            trigger.center = new Vector3(-0.06f, 0.04f, 0.08f);
+            trigger.size = new Vector3(0.30f, 0.18f, 0.48f);
+
+            var item = root.gameObject.AddComponent<PickupItem>();
+            item.Configure("Fishing rod", 0f, 0.04f, true, "Cast", false);
+            EditorUtility.SetDirty(item);
+
+            var rod = root.gameObject.AddComponent<FishingRod>();
+            rod.Configure(rodRig, telescopic, rodTip, reelCrank, bobber, caughtFish, line, seaLevel);
+            rod.ApplyPose();
+            EditorUtility.SetDirty(rod);
+            return item;
+        }
+
+        private static void BoxPart(PrimitiveType type, string name, Transform parent, Vector3 pos, Vector3 scale, Material mat)
+        {
+            var go = GameObject.CreatePrimitive(type);
+            go.name = name;
+            UnityEngine.Object.DestroyImmediate(go.GetComponent<Collider>());
+            go.transform.SetParent(parent, false);
+            go.transform.localPosition = pos;
+            go.transform.localScale = scale;
+            go.GetComponent<MeshRenderer>().sharedMaterial = mat;
+        }
+
+        private static Material BoxMaterial(string path, string hex, float smoothness)
+        {
+            var mat = AssetDatabase.LoadAssetAtPath<Material>(path);
+            if (mat == null)
+            {
+                mat = new Material(Shader.Find("Universal Render Pipeline/Lit"));
+                AssetDatabase.CreateAsset(mat, path);
+            }
+
+            ColorUtility.TryParseHtmlString(hex, out Color c);
+            mat.SetColor("_BaseColor", c);
+            mat.SetFloat("_Smoothness", smoothness);
+            EditorUtility.SetDirty(mat);
+            return mat;
         }
 
         private static void EnsureBuildingColliders()
@@ -318,9 +629,27 @@ namespace Arnafjordur.Editor
             return area;
         }
 
+        private static Vector3[] DensifyPath(Vector3[] pts, float maxStep)
+        {
+            var result = new List<Vector3>(pts.Length * 4) { pts[0] };
+            for (int i = 1; i < pts.Length; i++)
+            {
+                Vector3 a = pts[i - 1];
+                Vector3 b = pts[i];
+                int steps = Mathf.Max(1, Mathf.CeilToInt(new Vector2(b.x - a.x, b.z - a.z).magnitude / maxStep));
+                for (int s = 1; s <= steps; s++)
+                {
+                    result.Add(Vector3.Lerp(a, b, s / (float)steps));
+                }
+            }
+
+            return result.ToArray();
+        }
+
         private static Vector3[] BuildFootpathMeshAndGetPoints(FootpathData fp, Transform parent, Material gravelMat)
         {
-            Vector3[] src = fp.points;
+            // Resample to ~0.75 m so the flat ribbon can't span terrain bumps that poke through as grass.
+            Vector3[] src = DensifyPath(fp.points, 0.75f);
             int count = src.Length;
             var distances = new float[count];
             for (int i = 1; i < count; i++)
@@ -330,31 +659,12 @@ namespace Arnafjordur.Editor
                 distances[i] = distances[i - 1] + Mathf.Sqrt(dx * dx + dz * dz);
             }
 
-            const float MaxRampGrade = 0.55f;
-            float totalLen = Mathf.Max(0.001f, distances[count - 1]);
-            float yStart = SurfaceY(src[0], includeFootpaths: false);
-            float yEnd = SurfaceY(src[count - 1], includeFootpaths: false);
-            float startDelta = yStart - src[0].y;
-            float endDelta = yEnd - src[count - 1].y;
-
+            const float MaxRampGrade = 0.85f;
             var centerHeights = new float[count];
             for (int i = 0; i < count; i++)
             {
-                float d = distances[i];
-                float blendedY;
-                if (totalLen < 15f)
-                {
-                    blendedY = Mathf.Max(src[i].y, Mathf.Lerp(yStart, yEnd, d / totalLen)) + 0.03f;
-                }
-                else
-                {
-                    float startBlend = 1f - Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(d / 7.5f));
-                    float endBlend = 1f - Mathf.SmoothStep(0f, 1f, Mathf.Clamp01((totalLen - d) / 7.5f));
-                    blendedY = src[i].y + startDelta * startBlend + endDelta * endBlend + 0.03f;
-                }
-
                 float groundY = SurfaceY(src[i], includeFootpaths: false);
-                centerHeights[i] = Mathf.Max(blendedY, groundY + 0.03f);
+                centerHeights[i] = groundY + 0.06f;
             }
 
             SmoothMaxGradeEnvelope(centerHeights, distances, MaxRampGrade);
@@ -395,8 +705,13 @@ namespace Arnafjordur.Editor
                 float leftGround = SurfaceY(leftEdgePoints[i], includeFootpaths: false);
                 float rightGround = SurfaceY(rightEdgePoints[i], includeFootpaths: false);
 
-                leftTopHeights[i] = Mathf.Max(c.y, leftGround + 0.03f);
-                rightTopHeights[i] = Mathf.Max(c.y, rightGround + 0.03f);
+                // The ribbon top is planar between centre and edge, so lift each half above the highest ground across it.
+                float leftMid = SurfaceY(c - side * halfRibbon * 0.5f, includeFootpaths: false);
+                float rightMid = SurfaceY(c + side * halfRibbon * 0.5f, includeFootpaths: false);
+                c.y = Mathf.Max(c.y, Mathf.Max(leftMid, rightMid) + 0.06f);
+                centerLine[i] = c;
+                leftTopHeights[i] = Mathf.Max(c.y, Mathf.Max(leftGround, leftMid) + 0.06f);
+                rightTopHeights[i] = Mathf.Max(c.y, Mathf.Max(rightGround, rightMid) + 0.06f);
 
                 leftOuterPoints[i] = c - side * outerOffset;
                 rightOuterPoints[i] = c + side * outerOffset;
@@ -528,7 +843,49 @@ namespace Arnafjordur.Editor
             return result.ToArray();
         }
 
-        private static void FitTerrainUnderBeach(GameObject terrainGo, float sea)
+        /// <summary>
+        /// The street is a ribbon lying above the coarse terrain, so on the seaward side it ends in a
+        /// ledge the players can drop off but not climb back up. Lift the grass beside it into a
+        /// bank that meets the road edge. Skips the bridge, where the gap is the Stórá itself.
+        /// </summary>
+        private static bool RaiseToRoadEdge(ref Vector3 w, Vector3[] road)
+        {
+            const float RoadHalf = 1.8f, Reach = 7f, BankSlope = 0.6f, Under = 0.12f, MaxGap = 2.5f;
+            if (road == null || road.Length < 2 || w.x < 370f || w.x > 430f || w.z < 316f || w.z > 410f)
+            {
+                return false;
+            }
+
+            float best = float.MaxValue, roadY = 0f;
+            for (int k = 0; k < road.Length - 1; k++)
+            {
+                Vector2 a = new Vector2(road[k].x, road[k].z), b = new Vector2(road[k + 1].x, road[k + 1].z);
+                Vector2 ab = b - a, p = new Vector2(w.x, w.z);
+                float t = ab.sqrMagnitude < 1e-6f ? 0f : Mathf.Clamp01(Vector2.Dot(p - a, ab) / ab.sqrMagnitude);
+                float d = Vector2.Distance(p, a + ab * t);
+                if (d < best)
+                {
+                    best = d;
+                    roadY = Mathf.Lerp(road[k].y, road[k + 1].y, t);
+                }
+            }
+
+            if (best > Reach || roadY - w.y > MaxGap)
+            {
+                return false;
+            }
+
+            float target = roadY - Under - Mathf.Max(0f, best - RoadHalf) * BankSlope;
+            if (target <= w.y)
+            {
+                return false;
+            }
+
+            w.y = target;
+            return true;
+        }
+
+        private static void FitTerrainUnderBeach(GameObject terrainGo, float sea, Vector3[] road)
         {
             if (terrainGo == null || !terrainGo.TryGetComponent(out MeshFilter mf) || mf.sharedMesh == null)
             {
@@ -543,6 +900,13 @@ namespace Arnafjordur.Editor
             for (int i = 0; i < local.Length; i++)
             {
                 Vector3 w = tf.TransformPoint(local[i]);
+                if (RaiseToRoadEdge(ref w, road))
+                {
+                    local[i] = tf.InverseTransformPoint(w);
+                    lowered++;
+                    continue;
+                }
+
                 if (w.x < 420f || w.x > 456f || w.z < 308f || w.z > 405f)
                 {
                     continue;
@@ -599,6 +963,41 @@ namespace Arnafjordur.Editor
             Physics.SyncTransforms();
         }
 
+        /// <summary>
+        /// Presses Exit_Terrain down beneath Exit_Road and ChurchForecourt along the village corridors
+        /// so coarse hillside triangles don't poke through the asphalt.
+        /// </summary>
+        private static void FitTerrainUnderVillageRoads(WalkableFile data)
+        {
+            GameObject terrainGo = GameObject.Find("Exit_Terrain");
+            if (terrainGo == null || !terrainGo.TryGetComponent(out MeshFilter terrainFilter) || terrainFilter.sharedMesh == null)
+            {
+                return;
+            }
+
+            Vector3[] route = data.corridors?
+                .Where(c => c.points != null)
+                .SelectMany(c => c.points)
+                .ToArray();
+            if (route == null || route.Length == 0)
+            {
+                return;
+            }
+
+            Collider[] surfaces = UnityEngine.Object.FindObjectsByType<MeshCollider>(FindObjectsInactive.Include)
+                .Where(c => c.name == "Exit_Road" || c.name == "ChurchForecourt")
+                .Cast<Collider>()
+                .ToArray();
+            if (surfaces.Length == 0)
+            {
+                return;
+            }
+
+            int fitted = RoadTerrainFit.Apply(terrainFilter, surfaces, route, 80f, BeachTerrainMeshPath);
+            Debug.Log($"[VillageSceneSetup] lowered {fitted} terrain vertices under village roads");
+            Physics.SyncTransforms();
+        }
+
         private static void BuildBeach(WalkableFile data)
         {
             ZoneData zone = data.zones?.FirstOrDefault(z => z.name == "Beach");
@@ -628,7 +1027,7 @@ namespace Arnafjordur.Editor
             z1 = z0 + (nz - 1) * BeachGridStep;
 
             GameObject terrainGo = GameObject.Find("Exit_Terrain");
-            FitTerrainUnderBeach(terrainGo, sea);
+            FitTerrainUnderBeach(terrainGo, sea, data.corridors?.FirstOrDefault(c => c.name == "VillageRoad")?.points);
             Collider terrain = terrainGo != null ? terrainGo.GetComponent<Collider>() : null;
 
             var rawH = new float[nx * nz];
@@ -1000,6 +1399,232 @@ namespace Arnafjordur.Editor
                 + Mathf.PerlinNoise(x * 4.3f + 71.9f, z * 4.3f + 29.3f) * 0.15f;
         }
 
+        // ------------------------------------------------------------------ shore rocks
+        // Like the real shoreline: a band of basalt boulders and stones along the waterline,
+        // from the north end of the beach out to the boathouse. One combined mesh, no colliders.
+        private const string ShoreRockMeshPath = VillageAssetDir + "/ShoreRocks.asset";
+        private const string ShoreRockMatPath = VillageAssetDir + "/Mat_ShoreRock.mat";
+        private const string ShoreRockLightMatPath = VillageAssetDir + "/Mat_ShoreRock_Weathered.mat";
+
+        private static void BuildShoreRocks(float sea)
+        {
+            GameObject existing = GameObject.Find("ShoreRocks");
+            if (existing != null)
+            {
+                UnityEngine.Object.DestroyImmediate(existing);
+            }
+
+            GameObject terrainGo = GameObject.Find("Exit_Terrain");
+            Collider terrain = terrainGo != null ? terrainGo.GetComponent<Collider>() : null;
+            if (terrain == null)
+            {
+                Debug.LogWarning("[VillageSceneSetup] No Exit_Terrain - skipping shore rocks.");
+                return;
+            }
+
+            bool Ground(float x, float z, out float y)
+            {
+                y = 0f;
+                if (terrain.Raycast(new Ray(new Vector3(x, 40f, z), Vector3.down), out RaycastHit hit, 220f))
+                {
+                    y = hit.point.y;
+                    return true;
+                }
+
+                return false;
+            }
+
+            var rng = new System.Random(4511);
+            float R() => (float)rng.NextDouble();
+
+            var prototypes = new List<Mesh>();
+            for (int i = 0; i < 6; i++)
+            {
+                prototypes.Add(MakeRockPrototype(rng));
+            }
+
+            var dark = new CombineList();
+            var light = new CombineList();
+
+            const float zStart = 392f;
+            const float zEnd = 452f;
+            for (float z = zStart; z <= zEnd; z += 0.45f)
+            {
+                // shoreline: first point walking east where the terrain dips under the sea
+                float shoreX = float.NaN;
+                for (float x = 405f; x < 470f; x += 0.25f)
+                {
+                    if (Ground(x, z, out float sy) && sy < sea)
+                    {
+                        shoreX = x;
+                        break;
+                    }
+                }
+
+                if (float.IsNaN(shoreX))
+                {
+                    continue;
+                }
+
+                // fade in where the sand ends, and stop just short of the boathouse wall
+                float density = Smooth(zStart, zStart + 10f, z) * (1f - Smooth(zEnd - 4f, zEnd, z));
+                int perRow = 5 + rng.Next(4);
+                for (int k = 0; k < perRow; k++)
+                {
+                    if (R() > density)
+                    {
+                        continue;
+                    }
+
+                    // spread from the bank down into the shallows, a few metres out at most
+                    float across = Mathf.Lerp(-3.5f, 2.5f, R());
+                    float x = shoreX + across;
+                    float zz = z + (R() - 0.5f) * 0.6f;
+                    if (!Ground(x, zz, out float gy) || gy < sea - 1.5f)
+                    {
+                        continue; // the seabed drops off fast; only the shallows get rocks
+                    }
+
+                    float big = R();
+                    float size = big > 0.86f ? Mathf.Lerp(1.2f, 2.2f, R())
+                        : big > 0.45f ? Mathf.Lerp(0.55f, 1.1f, R())
+                        : Mathf.Lerp(0.2f, 0.5f, R());
+                    var scale = new Vector3(size * Mathf.Lerp(0.85f, 1.35f, R()), size * Mathf.Lerp(0.45f, 0.8f, R()), size * Mathf.Lerp(0.85f, 1.3f, R()));
+                    var rot = Quaternion.Euler((R() - 0.5f) * 25f, R() * 360f, (R() - 0.5f) * 25f);
+                    float y = gy - scale.y * 0.3f;
+                    if (gy < sea)
+                    {
+                        // in the shallows: stand the rock on the seabed but make it tall enough to break the surface
+                        // the unit rock's top is ~0.45 above its pivot; poke out by a third of its size
+                        float wantTop = sea + scale.y * 0.35f;
+                        scale.y = Mathf.Max(scale.y, (wantTop - gy) / 0.4f);
+                        scale.x = Mathf.Max(scale.x, scale.y * 1.1f);
+                        scale.z = Mathf.Max(scale.z, scale.y * 1.1f);
+                        y = gy - scale.y * 0.05f;
+                    }
+
+                    var pos = new Vector3(x, y, zz);
+                    Mesh proto = prototypes[rng.Next(prototypes.Count)];
+                    // wet rocks low down are dark; higher, drier ones are lighter and weathered
+                    (gy < sea + 0.6f || R() < 0.4f ? dark : light).Add(proto, Matrix4x4.TRS(pos, rot, scale));
+                }
+            }
+
+            Material darkMat = RockMaterial(ShoreRockMatPath, "Mat_ShoreRock", Palette.WetBasalt * 0.55f, 0.45f);
+            Material lightMat = RockMaterial(ShoreRockLightMatPath, "Mat_ShoreRock_Weathered", Color.Lerp(Palette.WetBasalt, Palette.HarbourConcrete, 0.25f) * 0.8f, 0.15f);
+
+            var combined = new Mesh { name = "ShoreRocks", indexFormat = UnityEngine.Rendering.IndexFormat.UInt32 };
+            combined.CombineMeshes(new[]
+            {
+                new CombineInstance { mesh = dark.Build(), transform = Matrix4x4.identity },
+                new CombineInstance { mesh = light.Build(), transform = Matrix4x4.identity },
+            }, mergeSubMeshes: false, useMatrices: true);
+            combined.RecalculateBounds();
+            AssetDatabase.DeleteAsset(ShoreRockMeshPath);
+            AssetDatabase.CreateAsset(combined, ShoreRockMeshPath);
+
+            var root = new GameObject("ShoreRocks") { isStatic = true };
+            root.AddComponent<MeshFilter>().sharedMesh = combined;
+            root.AddComponent<MeshRenderer>().sharedMaterials = new[] { darkMat, lightMat };
+            Debug.Log($"[VillageSceneSetup] Shore rocks: {dark.Count + light.Count} rocks, {combined.vertexCount} verts.");
+        }
+
+        private sealed class CombineList
+        {
+            private readonly List<CombineInstance> items = new List<CombineInstance>();
+            public int Count => items.Count;
+
+            public void Add(Mesh mesh, Matrix4x4 m) => items.Add(new CombineInstance { mesh = mesh, transform = m });
+
+            public Mesh Build()
+            {
+                var mesh = new Mesh { indexFormat = UnityEngine.Rendering.IndexFormat.UInt32 };
+                mesh.CombineMeshes(items.ToArray(), mergeSubMeshes: true, useMatrices: true);
+                return mesh;
+            }
+        }
+
+        private static Material RockMaterial(string path, string name, Color color, float smoothness)
+        {
+            var mat = AssetDatabase.LoadAssetAtPath<Material>(path);
+            if (mat == null)
+            {
+                mat = new Material(Shader.Find("Universal Render Pipeline/Lit")) { name = name };
+                AssetDatabase.CreateAsset(mat, path);
+            }
+
+            color.a = 1f;
+            mat.SetColor("_BaseColor", color);
+            mat.SetFloat("_Metallic", 0f);
+            mat.SetFloat("_Smoothness", smoothness);
+            var detail = AssetDatabase.LoadAssetAtPath<Texture2D>(TerrainDetailPath);
+            if (detail != null)
+            {
+                mat.SetTexture("_DetailAlbedoMap", detail);
+                mat.SetFloat("_DetailAlbedoMapScale", 0.8f);
+                mat.EnableKeyword("_DETAIL_MULX2");
+            }
+
+            EditorUtility.SetDirty(mat);
+            return mat;
+        }
+
+        /// <summary>A lumpy, faceted unit boulder: a sphere pushed around by noise and flattened underneath.</summary>
+        private static Mesh MakeRockPrototype(System.Random rng)
+        {
+            const int rings = 4;
+            const int segs = 6;
+            float ox = (float)rng.NextDouble() * 100f;
+            float oz = (float)rng.NextDouble() * 100f;
+            var grid = new Vector3[(rings + 1) * segs];
+            for (int r = 0; r <= rings; r++)
+            {
+                float phi = Mathf.PI * r / rings;
+                for (int s = 0; s < segs; s++)
+                {
+                    float th = 2f * Mathf.PI * s / segs;
+                    var dir = new Vector3(Mathf.Sin(phi) * Mathf.Cos(th), Mathf.Cos(phi), Mathf.Sin(phi) * Mathf.Sin(th));
+                    float n = Mathf.PerlinNoise(dir.x * 1.6f + ox, dir.z * 1.6f + dir.y * 0.9f + oz);
+                    Vector3 p = dir * (0.5f * (0.72f + 0.5f * n));
+                    if (p.y < -0.12f)
+                    {
+                        p.y = -0.12f + (p.y + 0.12f) * 0.3f;
+                    }
+
+                    grid[r * segs + s] = p;
+                }
+            }
+
+            // flat-shaded: each triangle gets its own vertices, which reads as chipped stone
+            var verts = new List<Vector3>();
+            var tris = new List<int>();
+            void Tri(Vector3 a, Vector3 b, Vector3 c)
+            {
+                tris.Add(verts.Count); verts.Add(a);
+                tris.Add(verts.Count); verts.Add(b);
+                tris.Add(verts.Count); verts.Add(c);
+            }
+
+            for (int r = 0; r < rings; r++)
+            {
+                for (int s = 0; s < segs; s++)
+                {
+                    int s1 = (s + 1) % segs;
+                    Vector3 a = grid[r * segs + s], b = grid[r * segs + s1];
+                    Vector3 c = grid[(r + 1) * segs + s], d = grid[(r + 1) * segs + s1];
+                    if (r > 0) Tri(a, b, c);
+                    if (r < rings - 1) Tri(b, d, c);
+                }
+            }
+
+            var mesh = new Mesh { name = "RockProto" };
+            mesh.SetVertices(verts);
+            mesh.SetTriangles(tris, 0);
+            mesh.SetUVs(0, verts.Select(v => new Vector2(v.x + v.y, v.z + v.y)).ToList());
+            mesh.RecalculateNormals();
+            return mesh;
+        }
+
         private static float Smooth(float a, float b, float v)
         {
             float t = Mathf.Clamp01((v - a) / (b - a));
@@ -1145,12 +1770,57 @@ namespace Arnafjordur.Editor
                     idle.SampleAnimation(charTransform.gameObject, 0f);
                 }
 
+                Transform handBone = null;
+                Transform lowerArmBone = null;
+                Transform beerTf = null;
+                Vector3 gripLocal = Vector3.zero;
+                float gripBelow = 0.02f;
+
                 if (charTransform.TryGetComponent(out BeerDrinker drinker))
                 {
                     drinker.StartLowered = true;
                     drinker.Pose(0f, 0f);
+                    handBone = drinker.Hand;
+                    lowerArmBone = drinker.LowerArm;
+                    beerTf = drinker.Beer;
+                    gripLocal = drinker.GripLocal;
+                    gripBelow = drinker.GripBelowCentre;
+                    drinker.enabled = false;
                     EditorUtility.SetDirty(drinker);
                 }
+
+                if (handBone == null)
+                {
+                    handBone = charTransform.GetComponentsInChildren<Transform>(true).FirstOrDefault(t => t.name == "RightHand");
+                }
+
+                if (lowerArmBone == null)
+                {
+                    lowerArmBone = charTransform.GetComponentsInChildren<Transform>(true).FirstOrDefault(t => t.name == "RightLowerArm");
+                }
+
+                if (gripLocal == Vector3.zero && handBone != null)
+                {
+                    gripLocal = CharacterItemHolder.ComputeFistCentre(charTransform, handBone, lowerArmBone);
+                }
+
+                if (beerTf == null)
+                {
+                    beerTf = charTransform.GetComponentsInChildren<Transform>(true).FirstOrDefault(t => t.name == "Beer");
+                }
+
+                PickupItem beerItem = null;
+                if (beerTf != null)
+                {
+                    beerItem = GetOrAdd<PickupItem>(beerTf.gameObject);
+                    beerItem.Configure("Beer", gripBelow, 0.075f, true, "Drink", true);
+                    EditorUtility.SetDirty(beerItem);
+                }
+
+                var itemHolder = GetOrAdd<CharacterItemHolder>(charTransform.gameObject);
+                itemHolder.Configure(handBone, gripLocal, beerItem);
+                itemHolder.PoseHeldItem();
+                EditorUtility.SetDirty(itemHolder);
 
                 var controller = GetOrAdd<CharacterController>(charTransform.gameObject);
                 controller.height = 1.74f;
@@ -1165,9 +1835,12 @@ namespace Arnafjordur.Editor
                 motor.Configure(name, animator);
                 motor.Area = walkableArea;
 
+                var drunk = GetOrAdd<CharacterDrunk>(charTransform.gameObject);
+
                 EditorUtility.SetDirty(animator);
                 EditorUtility.SetDirty(controller);
                 EditorUtility.SetDirty(motor);
+                EditorUtility.SetDirty(drunk);
                 motors[i] = motor;
             }
 
@@ -1181,7 +1854,7 @@ namespace Arnafjordur.Editor
             return motors;
         }
 
-        private static void SetupCameraPartyAndHud(Camera cam, CharacterMotor[] motors, GameObject partyGo)
+        private static void SetupCameraPartyAndHud(Camera cam, CharacterMotor[] motors, GameObject partyGo, SeaMineBomb seaMine)
         {
             cam.gameObject.name = "MainCamera";
             cam.fieldOfView = 45f;
@@ -1203,6 +1876,13 @@ namespace Arnafjordur.Editor
             hud.Configure(partyController);
             EditorUtility.SetDirty(hud);
 
+            if (seaMine != null)
+            {
+                var seaMineUi = GetOrAdd<SeaMineBombUi>(partyGo);
+                seaMineUi.Configure(seaMine, partyController);
+                EditorUtility.SetDirty(seaMineUi);
+            }
+
             EventSystem existingEventSystem = UnityEngine.Object.FindAnyObjectByType<EventSystem>();
             if (existingEventSystem == null)
             {
@@ -1223,10 +1903,13 @@ namespace Arnafjordur.Editor
                 bool inside = area.Contains(p);
                 bool hasGround = TrySurfaceY(p, includeFootpaths: true, out float groundY);
                 float groundDelta = hasGround ? Mathf.Abs(p.y - groundY) : float.PositiveInfinity;
-                log += $"\n  Start {motor.DisplayName}: {p} inside={inside} groundY={groundY:F2} delta={groundDelta:F3} areaBound={motor.Area == area}";
-                if (!inside || !hasGround || groundDelta > 0.05f || motor.Area != area)
+                string heldName = motor.TryGetComponent(out CharacterItemHolder holder) && holder.HeldItem != null
+                    ? holder.HeldItem.DisplayName
+                    : "None";
+                log += $"\n  Start {motor.DisplayName}: {p} inside={inside} groundY={groundY:F2} delta={groundDelta:F3} areaBound={motor.Area == area} held={heldName}";
+                if (!inside || !hasGround || groundDelta > 0.05f || motor.Area != area || heldName != "Beer")
                 {
-                    Debug.LogError($"[VillageSceneSetup] Player {motor.DisplayName} invalid start state at {p} (inside={inside}, hasGround={hasGround}, groundDelta={groundDelta:F3}, areaBound={motor.Area == area})!");
+                    Debug.LogError($"[VillageSceneSetup] Player {motor.DisplayName} invalid start state at {p} (inside={inside}, hasGround={hasGround}, groundDelta={groundDelta:F3}, areaBound={motor.Area == area}, held={heldName})!");
                 }
             }
 
@@ -1408,6 +2091,10 @@ namespace Arnafjordur.Editor
                     new Vector3(427f, -83f, 338f),
                     new Vector3(441f, -89.2f, 350f), 50f);
 
+                LookShot("village_shore_rocks.png",
+                    new Vector3(426f, -85.5f, 400f),
+                    new Vector3(442f, -89f, 440f), 50f);
+
                 LookShot("village_overview.png",
                     new Vector3(355f, -55f, 255f),
                     new Vector3(412f, -84f, 345f), 42f);
@@ -1422,6 +2109,10 @@ namespace Arnafjordur.Editor
                 if (motors != null && motors.Length > 0 && motors[0] != null)
                 {
                     CharacterMotor player = motors[0];
+                    LookShot("village_beer_carry.png",
+                        player.transform.TransformPoint(new Vector3(1.15f, 1.35f, 1.10f)),
+                        player.transform.TransformPoint(new Vector3(0.05f, 0.95f, 0.10f)), 40f);
+
                     var cc = player.GetComponent<CharacterController>();
                     Vector3 keepCharPos = player.transform.position;
                     Quaternion keepCharRot = player.transform.rotation;
@@ -1551,6 +2242,842 @@ namespace Arnafjordur.Editor
         private static T GetOrAdd<T>(GameObject target) where T : Component
         {
             return target.TryGetComponent(out T component) ? component : target.AddComponent<T>();
+        }
+
+        private static void VerifyDrunkProgression(CharacterMotor[] motors, Camera cam)
+        {
+            AssertDrunkCondition(motors != null && motors.Length > 0 && motors[0] != null, "Missing player CharacterMotor.");
+            CharacterMotor player = motors[0];
+            CharacterDrunk drunk = player.GetComponent<CharacterDrunk>();
+            CharacterItemHolder itemHolder = player.GetComponent<CharacterItemHolder>();
+            AssertDrunkCondition(drunk != null, "Player missing CharacterDrunk component.");
+            AssertDrunkCondition(cam != null, "Missing Camera for drunk verification renders.");
+
+            AssertDrunkCondition(
+                drunk.Stage == CharacterDrunk.DrunkStage.Sober && Mathf.Approximately(drunk.BeersDrunk, 0f),
+                $"Expected sober start, got stage={drunk.Stage}, beers={drunk.BeersDrunk:F2}.");
+
+            for (int i = 0; i < 5; i++)
+            {
+                drunk.RecordSip(0.2f);
+            }
+            AssertDrunkCondition(
+                drunk.Stage == CharacterDrunk.DrunkStage.SlightlyBuzzed,
+                $"Expected SlightlyBuzzed after 5 sips, got {drunk.Stage}.");
+            drunk.Tick(0.3f);
+            Vector3 slightlyBuzzedVel = drunk.ModifyDesiredVelocity(new Vector3(0f, 0f, 1.75f), false, 0.05f);
+            AssertDrunkCondition(
+                Mathf.Abs(slightlyBuzzedVel.x) > 0.001f,
+                $"Expected lateral walking drift at 1 beer, got x={slightlyBuzzedVel.x:F4}.");
+
+            for (int i = 0; i < 5; i++)
+            {
+                drunk.RecordSip(0.2f);
+            }
+            AssertDrunkCondition(
+                drunk.Stage == CharacterDrunk.DrunkStage.Buzzed,
+                $"Expected Buzzed after 10 sips, got {drunk.Stage}.");
+            AssertDrunkCondition(
+                drunk.GetTurnSpeedMultiplier() < 0.9f,
+                $"Expected reduced turn speed at 2 beers, got {drunk.GetTurnSpeedMultiplier():F3}.");
+
+            for (int i = 0; i < 5; i++)
+            {
+                drunk.RecordSip(0.2f);
+            }
+            AssertDrunkCondition(
+                drunk.Stage == CharacterDrunk.DrunkStage.HardToWalk,
+                $"Expected HardToWalk after 15 sips, got {drunk.Stage}.");
+            AssertDrunkCondition(
+                drunk.GetTurnSpeedMultiplier() < 0.6f,
+                $"Expected heavily impaired turn speed at 3 beers, got {drunk.GetTurnSpeedMultiplier():F3}.");
+            Vector3 hardRunVel = drunk.ModifyDesiredVelocity(new Vector3(0f, 0f, player.RunSpeed), true, 0.2f);
+            AssertDrunkCondition(
+                hardRunVel.magnitude < player.RunSpeed * 0.8f,
+                $"Expected impaired run speed at 3 beers, got {hardRunVel.magnitude:F2} vs RunSpeed {player.RunSpeed:F2}.");
+
+            for (int i = 0; i < 5; i++)
+            {
+                drunk.RecordSip(0.2f);
+            }
+            AssertDrunkCondition(
+                drunk.Stage == CharacterDrunk.DrunkStage.PukingAndFalling,
+                $"Expected PukingAndFalling after 20 sips, got {drunk.Stage}.");
+
+            drunk.Tick(0.1f);
+            AssertDrunkCondition(
+                drunk.IsIncapacitated && drunk.IsPuking,
+                $"Expected incapacitated and puking at 0.1s, got incapacitated={drunk.IsIncapacitated}, puking={drunk.IsPuking}.");
+            AssertDrunkCondition(
+                drunk.ModifyDesiredVelocity(new Vector3(0f, 0f, 2f), false, 0.1f) == Vector3.zero,
+                "Expected zero desired velocity while puking.");
+
+            Vector3 savedCamPos = cam.transform.position;
+            Quaternion savedCamRot = cam.transform.rotation;
+            float savedCamFov = cam.fieldOfView;
+            try
+            {
+                string previewDir = Path.GetFullPath(Path.Combine(Application.dataPath, "../Docs/preview"));
+                Directory.CreateDirectory(previewDir);
+
+                player.gameObject.SetActive(false);
+                try
+                {
+                    Shot(cam, null);
+                }
+                finally
+                {
+                    player.gameObject.SetActive(true);
+                }
+
+                for (int i = 0; i < 19; i++)
+                {
+                    drunk.Tick(0.05f);
+                    drunk.ApplyBonePose();
+                    if (itemHolder != null)
+                    {
+                        itemHolder.PoseHeldItem();
+                    }
+                }
+                AssertDrunkCondition(
+                    GameObject.Find("VomitPuddle") != null,
+                    "Expected VomitPuddle GameObject to exist after puking heave at 1.05s.");
+
+                cam.transform.position = player.transform.position
+                    + player.transform.forward * 2.25f
+                    + player.transform.right * 1.55f
+                    + Vector3.up * 1.15f;
+                cam.transform.LookAt(player.transform.position + player.transform.forward * 0.35f + Vector3.up * 0.72f);
+                cam.fieldOfView = 46f;
+                RenderPosedPlayerShot(cam, player, Path.Combine(previewDir, "village_drunk_puking.png"));
+
+                for (int i = 0; i < 12; i++)
+                {
+                    drunk.Tick(0.2f);
+                }
+                drunk.ApplyBonePose();
+                if (itemHolder != null)
+                {
+                    itemHolder.PoseHeldItem();
+                }
+
+                Transform hips = FindChildByName(player.transform, "Hips");
+                AssertDrunkCondition(hips != null, "Could not locate Hips transform on player character.");
+                float hipHeight = hips.position.y - player.transform.position.y;
+                AssertDrunkCondition(
+                    drunk.IsFallen && hipHeight < 0.35f,
+                    $"Expected fallen pose at 3.45s, got IsFallen={drunk.IsFallen}, hipHeight={hipHeight:F3}m.");
+
+                cam.transform.position = player.transform.position
+                    + player.transform.forward * 2.25f
+                    + player.transform.right * 1.65f
+                    + Vector3.up * 1.25f;
+                cam.transform.LookAt(player.transform.position + player.transform.forward * 0.35f + Vector3.up * 0.25f);
+                cam.fieldOfView = 45f;
+                RenderPosedPlayerShot(cam, player, Path.Combine(previewDir, "village_drunk_fallen.png"));
+
+                for (int i = 0; i < 18; i++)
+                {
+                    drunk.Tick(0.25f);
+                }
+                drunk.ApplyBonePose();
+                if (itemHolder != null)
+                {
+                    itemHolder.PoseHeldItem();
+                }
+                AssertDrunkCondition(
+                    !drunk.IsIncapacitated,
+                    $"Expected character to recover by 7.95s, still incapacitated={drunk.IsIncapacitated}.");
+            }
+            finally
+            {
+                player.gameObject.SetActive(true);
+                cam.transform.position = savedCamPos;
+                cam.transform.rotation = savedCamRot;
+                cam.fieldOfView = savedCamFov;
+                drunk.ClearSpawnedVomit();
+                drunk.SetBeersDrunk(0f);
+                drunk.ApplyBonePose();
+                if (itemHolder != null)
+                {
+                    itemHolder.PoseHeldItem();
+                }
+            }
+
+            Debug.Log("[VillageSceneSetup] Drunk progression verification: OK (0->1->2->3->4 beers, puke, fall, recover)");
+        }
+
+        private static void VerifyFishingRod(GameObject carGo, CharacterMotor[] motors, Camera cam)
+        {
+            AssertCondition("Fishing rod", carGo != null, "Missing VWGolf_WithPlayers.");
+            AssertCondition("Fishing rod", motors != null && motors.Length > 0 && motors[0] != null, "Missing player CharacterMotor.");
+            AssertCondition("Fishing rod", cam != null, "Missing Camera for fishing rod renders.");
+
+            Transform golf = carGo.transform.Find("VWGolf");
+            Transform tailgate = golf != null ? golf.Find("Tailgate") : null;
+            CarTrunk trunk = tailgate != null ? tailgate.GetComponent<CarTrunk>() : null;
+            Transform rodTf = golf != null ? golf.Find("FishingRod") : null;
+            FishingRod rod = rodTf != null ? rodTf.GetComponent<FishingRod>() : null;
+            PickupItem rodItem = rodTf != null ? rodTf.GetComponent<PickupItem>() : null;
+
+            CharacterMotor player = motors[0];
+            CharacterItemHolder itemHolder = player.GetComponent<CharacterItemHolder>();
+            CharacterController cc = player.GetComponent<CharacterController>();
+
+            AssertCondition("Fishing rod", trunk != null && rod != null && rodItem != null && itemHolder != null,
+                "Missing CarTrunk, FishingRod, PickupItem, or CharacterItemHolder.");
+
+            trunk.Toggle();
+            trunk.Toggle();
+            AssertCondition("Fishing rod", !trunk.IsOpen && !rodItem.enabled,
+                $"Expected rod pickup disabled while trunk closed (IsOpen={trunk.IsOpen}, enabled={rodItem.enabled}).");
+
+            trunk.Toggle();
+            AssertCondition("Fishing rod", trunk.IsOpen && rodItem.enabled,
+                $"Expected rod pickup enabled when trunk opened (IsOpen={trunk.IsOpen}, enabled={rodItem.enabled}).");
+
+            Quaternion savedTailgateRot = trunk.transform.localRotation;
+            Vector3 savedCamPos = cam.transform.position;
+            Quaternion savedCamRot = cam.transform.rotation;
+            float savedCamFov = cam.fieldOfView;
+            Vector3 savedPlayerPos = player.transform.position;
+            Quaternion savedPlayerRot = player.transform.rotation;
+            PickupItem previousHeld = itemHolder.HeldItem;
+
+            try
+            {
+                string previewDir = Path.GetFullPath(Path.Combine(Application.dataPath, "../Docs/preview"));
+                Directory.CreateDirectory(previewDir);
+
+                Vector3 hingeAxis = Vector3.right;
+                MeshRenderer tailMesh = trunk.GetComponentInChildren<MeshRenderer>();
+                if (tailMesh != null)
+                {
+                    Vector3 lever = tailMesh.bounds.center - trunk.transform.position;
+                    Vector3 axisWorld = trunk.transform.TransformDirection(hingeAxis);
+                    if ((Quaternion.AngleAxis(30f, axisWorld) * lever).y < lever.y)
+                    {
+                        hingeAxis = -hingeAxis;
+                    }
+                }
+
+                trunk.transform.localRotation = savedTailgateRot * Quaternion.AngleAxis(78f, hingeAxis);
+                Physics.SyncTransforms();
+
+                cam.transform.position = trunk.transform.position + carGo.transform.forward * -2.1f + Vector3.up * 0.75f;
+                cam.transform.LookAt(rod.transform.position - carGo.transform.right * 0.25f + Vector3.up * 0.05f);
+                cam.fieldOfView = 46f;
+
+                player.gameObject.SetActive(false);
+                try
+                {
+                    Shot(cam, Path.Combine(previewDir, "village_trunk_fishing_rod.png"));
+                }
+                finally
+                {
+                    player.gameObject.SetActive(true);
+                }
+
+                trunk.transform.localRotation = savedTailgateRot;
+
+                AssertCondition("Fishing rod", itemHolder.TryPickup(rodItem) && itemHolder.HeldItem == rodItem,
+                    "Player failed to pick up FishingRod from open trunk.");
+                rod.ApplyPose();
+                AssertCondition("Fishing rod", rod.State == FishingRod.RodState.Idle,
+                    $"Expected Idle state on pickup, got {rod.State}.");
+
+                Vector3 beachPos = new Vector3(441.2f, SurfaceY(new Vector3(441.2f, 0f, 342f), false), 342f);
+                if (cc != null) cc.enabled = false;
+                player.transform.SetPositionAndRotation(beachPos, Quaternion.Euler(0f, 90f, 0f));
+                if (cc != null) cc.enabled = true;
+                Physics.SyncTransforms();
+                itemHolder.PoseHeldItem();
+                rod.ApplyPose();
+
+                AssertCondition("Fishing rod", itemHolder.TryUseHeldItem(),
+                    "Failed to use FishingRod to cast from beach shoreline.");
+
+                for (int i = 0; i < 7; i++)
+                {
+                    rod.Tick(0.1f);
+                    itemHolder.PoseHeldItem();
+                    rod.ApplyPose();
+                }
+
+                AssertCondition("Fishing rod", rod.State == FishingRod.RodState.Fishing && rod.IsLineOut,
+                    $"Expected Fishing state at 0.7s on beach shoreline, got {rod.State} (IsLineOut={rod.IsLineOut}).");
+
+                cam.transform.position = player.transform.position
+                    - player.transform.forward * 2.2f
+                    - player.transform.right * 2.4f
+                    + Vector3.up * 1.65f;
+                cam.transform.LookAt(player.transform.position + player.transform.forward * 2.8f + Vector3.up * 0.55f);
+                cam.fieldOfView = 50f;
+                RenderPosedPlayerShot(cam, player, Path.Combine(previewDir, "village_fishing_cast.png"));
+
+                for (int i = 0; i < 10; i++)
+                {
+                    rod.Tick(0.25f);
+                    itemHolder.PoseHeldItem();
+                    rod.ApplyPose();
+                }
+
+                AssertCondition("Fishing rod", rod.State == FishingRod.RodState.Bite,
+                    $"Expected Bite state after 2.5s waiting, got {rod.State}.");
+
+                AssertCondition("Fishing rod", itemHolder.TryUseHeldItem() && rod.State == FishingRod.RodState.Reeling,
+                    $"Expected Reeling state when using rod during Bite, got {rod.State}.");
+
+                for (int i = 0; i < 9; i++)
+                {
+                    rod.Tick(0.1f);
+                    itemHolder.PoseHeldItem();
+                    rod.ApplyPose();
+                }
+
+                AssertCondition("Fishing rod", rod.State == FishingRod.RodState.Idle && rod.FishCaughtCount == 1,
+                    $"Expected Idle state with FishCaughtCount == 1, got state={rod.State}, caught={rod.FishCaughtCount}.");
+            }
+            finally
+            {
+                player.gameObject.SetActive(true);
+                if (cc != null) cc.enabled = false;
+                player.transform.SetPositionAndRotation(savedPlayerPos, savedPlayerRot);
+                if (cc != null) cc.enabled = true;
+                Physics.SyncTransforms();
+
+                if (itemHolder != null && itemHolder.HeldItem == rodItem)
+                {
+                    itemHolder.DropHeldItem();
+                }
+
+                if (rodItem != null && golf != null)
+                {
+                    rodItem.transform.SetParent(golf, false);
+                    rodItem.transform.localPosition = new Vector3(0.32f, 0.585f, -1.66f);
+                    rodItem.transform.localRotation = Quaternion.identity;
+                }
+
+                if (rod != null)
+                {
+                    rod.ResetToStowed();
+                }
+
+                if (previousHeld != null && itemHolder != null && itemHolder.HeldItem != previousHeld)
+                {
+                    itemHolder.TryPickup(previousHeld);
+                    itemHolder.PoseHeldItem();
+                }
+
+                if (trunk != null)
+                {
+                    trunk.transform.localRotation = savedTailgateRot;
+                    if (trunk.IsOpen)
+                    {
+                        trunk.Toggle();
+                    }
+                }
+
+                cam.transform.SetPositionAndRotation(savedCamPos, savedCamRot);
+                cam.fieldOfView = savedCamFov;
+            }
+
+            Debug.Log("[VillageSceneSetup] Fishing rod verification: OK (trunk gate, pickup, beach cast, bite, reel 1 fish)");
+        }
+
+        private static SeaMineBomb BuildSeaMineBomb(float seaLevel)
+        {
+            GameObject existing = GameObject.Find("AtomBombSeaMine");
+            if (existing != null)
+            {
+                UnityEngine.Object.DestroyImmediate(existing);
+            }
+
+            string matDir = Path.Combine(Application.dataPath, "Props/SeaMine");
+            Directory.CreateDirectory(matDir);
+
+            Material ironMat = SeaMineMaterial("Mat_SeaMine_Iron", Color.Lerp(Palette.DeepFjordSlate, Palette.WetBasalt, 0.52f), 0.42f, 0.62f);
+            Material rustMat = SeaMineMaterial("Mat_SeaMine_Rust", Palette.BoathouseRust, 0.28f, 0.25f);
+            Material brassMat = SeaMineMaterial("Mat_SeaMine_Brass", Color.Lerp(Palette.LanternAmber, Palette.SunbreakKey, 0.35f), 0.58f, 0.78f);
+            Material atomicMat = SeaMineMaterial("Mat_SeaMine_AtomicAmber", Palette.UiAccentAmber, 0.38f, 0.12f);
+            Material panelMat = SeaMineMaterial("Mat_SeaMine_Panel", Palette.UiPanelSlate, 0.30f, 0.48f);
+            Material steelMat = SeaMineMaterial("Mat_SeaMine_Steel", Palette.HarbourConcrete, 0.50f, 0.72f);
+            Material kelpMat = SeaMineMaterial("Mat_SeaMine_Kelp", Color.Lerp(Palette.TurfMoss, Palette.DeepFjordSlate, 0.35f), 0.32f, 0.0f);
+            Material ledRedMat = SeaMineMaterial("Mat_SeaMine_LedRed", Color.Lerp(Palette.BoathouseRust, new Color(0.95f, 0.16f, 0.14f, 1f), 0.7f), 0.78f, 0.1f, new Color(1.4f, 0.16f, 0.12f, 1f));
+            Material ledGreenMat = SeaMineMaterial("Mat_SeaMine_LedGreen", Palette.UiConfirmGreen, 0.78f, 0.1f, Palette.UiConfirmGreen * 1.35f);
+            Material ledAmberMat = SeaMineMaterial("Mat_SeaMine_LedAmber", Palette.UiAccentAmber, 0.78f, 0.1f, Palette.UiAccentAmber * 1.25f);
+            Material beachSandMat = AssetDatabase.LoadAssetAtPath<Material>("Assets/Environment/Village/Mat_Village_BeachSand.mat")
+                ?? SeaMineMaterial("Mat_SeaMine_WetSand", Color.Lerp(Palette.HarbourConcrete, Palette.DriftwoodTimber, 0.35f), 0.25f, 0.0f);
+
+            Vector3 minePos = new Vector3(438.2f, 0f, 334.0f);
+            minePos.y = TrySurfaceY(minePos, includeFootpaths: false, out float beachY) ? beachY : seaLevel + 0.55f;
+
+            var mineGo = new GameObject("AtomBombSeaMine");
+            mineGo.transform.position = minePos;
+            mineGo.transform.rotation = Quaternion.Euler(0f, -22f, 0f);
+
+            // Trigger sphere handles click-to-inspect raycasts while Layer-2 MineObstacle stops characters walking through the hull.
+            var clickTrigger = mineGo.AddComponent<SphereCollider>();
+            clickTrigger.center = new Vector3(0f, 0.44f, 0f);
+            clickTrigger.radius = 0.92f;
+            clickTrigger.isTrigger = true;
+
+            var obstacleGo = new GameObject("MineObstacle");
+            obstacleGo.layer = 2;
+            obstacleGo.transform.SetParent(mineGo.transform, false);
+            var solidCol = obstacleGo.AddComponent<SphereCollider>();
+            solidCol.center = new Vector3(0f, 0.44f, 0f);
+            solidCol.radius = 0.58f;
+
+            var hullGo = new GameObject("MineHull");
+            hullGo.transform.SetParent(mineGo.transform, false);
+            hullGo.transform.localPosition = new Vector3(0f, 0.44f, 0f);
+            hullGo.transform.localRotation = Quaternion.Euler(5f, 0f, -8f);
+
+            BoxPart(PrimitiveType.Sphere, "MainSphere", hullGo.transform, Vector3.zero, new Vector3(1.12f, 1.12f, 1.12f), ironMat);
+            BoxPart(PrimitiveType.Cylinder, "EquatorialBelt", hullGo.transform, Vector3.zero, new Vector3(1.18f, 0.042f, 1.18f), rustMat);
+
+            for (int r = 0; r < 12; r++)
+            {
+                float angle = r * (360f / 12f) * Mathf.Deg2Rad;
+                Vector3 rivetPos = new Vector3(Mathf.Cos(angle) * 0.60f, 0.0f, Mathf.Sin(angle) * 0.60f);
+                BoxPart(PrimitiveType.Sphere, $"BeltRivet_{r:D2}", hullGo.transform, rivetPos, new Vector3(0.036f, 0.036f, 0.036f), brassMat);
+            }
+
+            // Hazard atomic collar ring around the upper crown (radius comfortably outside the sphere skin to avoid z-fighting).
+            BoxPart(PrimitiveType.Cylinder, "AtomicBand", hullGo.transform, new Vector3(0f, 0.34f, 0f), new Vector3(0.95f, 0.035f, 0.95f), atomicMat);
+
+            // Top armed warning beacon visible from afar on the beach.
+            BoxPart(PrimitiveType.Cylinder, "BeaconCollar", hullGo.transform, new Vector3(0f, 0.56f, 0f), new Vector3(0.16f, 0.045f, 0.16f), steelMat);
+            var beaconGo = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            beaconGo.name = "ArmedBeacon";
+            UnityEngine.Object.DestroyImmediate(beaconGo.GetComponent<Collider>());
+            beaconGo.transform.SetParent(hullGo.transform, false);
+            beaconGo.transform.localPosition = new Vector3(0f, 0.62f, 0f);
+            beaconGo.transform.localScale = new Vector3(0.12f, 0.11f, 0.12f);
+            var beaconRenderer = beaconGo.GetComponent<MeshRenderer>();
+            beaconRenderer.sharedMaterial = ledRedMat;
+
+            // Naval Hertz contact horns crowning sides, back, and dome (leaving the -X control hatch unobstructed).
+            Vector3[] hornDirs =
+            {
+                new Vector3(0.24f, 0.88f, 0.40f).normalized,
+                new Vector3(0.24f, 0.88f, -0.40f).normalized,
+                new Vector3(-0.35f, 0.86f, 0.36f).normalized,
+                new Vector3(-0.35f, 0.86f, -0.36f).normalized,
+                new Vector3(0.62f, 0.66f, 0.42f).normalized,
+                new Vector3(0.62f, 0.66f, -0.42f).normalized,
+                new Vector3(0.05f, 0.42f, 0.90f).normalized,
+                new Vector3(0.05f, 0.42f, -0.90f).normalized,
+                new Vector3(-0.52f, 0.32f, 0.79f).normalized,
+                new Vector3(-0.52f, 0.32f, -0.79f).normalized,
+            };
+
+            for (int i = 0; i < hornDirs.Length; i++)
+            {
+                Vector3 dir = hornDirs[i];
+                var hornPivot = new GameObject($"ContactHorn_{i:D2}");
+                hornPivot.transform.SetParent(hullGo.transform, false);
+                hornPivot.transform.localPosition = dir * 0.54f;
+                hornPivot.transform.localRotation = Quaternion.FromToRotation(Vector3.up, dir);
+
+                BoxPart(PrimitiveType.Cylinder, "Collar", hornPivot.transform, new Vector3(0f, 0.02f, 0f), new Vector3(0.105f, 0.025f, 0.105f), rustMat);
+                BoxPart(PrimitiveType.Cylinder, "Stem", hornPivot.transform, new Vector3(0f, 0.085f, 0f), new Vector3(0.055f, 0.075f, 0.055f), steelMat);
+                BoxPart(PrimitiveType.Sphere, "LeadTip", hornPivot.transform, new Vector3(0f, 0.165f, 0f), new Vector3(0.068f, 0.058f, 0.068f), brassMat);
+            }
+
+            // Atomic trefoil placard mounted proudly above the decipher control bay.
+            var emblemGo = new GameObject("AtomicTrefoilEmblem");
+            emblemGo.transform.SetParent(mineGo.transform, false);
+            emblemGo.transform.localPosition = new Vector3(-0.44f, 0.87f, 0f);
+            emblemGo.transform.localRotation = Quaternion.LookRotation(new Vector3(-0.74f, 0.67f, 0f).normalized, Vector3.up);
+            BoxPart(PrimitiveType.Cylinder, "BadgeDisk", emblemGo.transform, Vector3.zero, new Vector3(0.22f, 0.018f, 0.22f), panelMat);
+            FindChildByName(emblemGo.transform, "BadgeDisk").localRotation = Quaternion.Euler(90f, 0f, 0f);
+            BoxPart(PrimitiveType.Cylinder, "CoreDot", emblemGo.transform, new Vector3(0f, 0f, 0.020f), new Vector3(0.048f, 0.008f, 0.048f), atomicMat);
+            FindChildByName(emblemGo.transform, "CoreDot").localRotation = Quaternion.Euler(90f, 0f, 0f);
+            for (int b = 0; b < 3; b++)
+            {
+                float rad = (b * 120f + 90f) * Mathf.Deg2Rad;
+                var bladeGo = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                bladeGo.name = $"TrefoilBlade_{b}";
+                UnityEngine.Object.DestroyImmediate(bladeGo.GetComponent<Collider>());
+                bladeGo.transform.SetParent(emblemGo.transform, false);
+                bladeGo.transform.localPosition = new Vector3(Mathf.Cos(rad) * 0.055f, Mathf.Sin(rad) * 0.055f, 0.020f);
+                bladeGo.transform.localRotation = Quaternion.Euler(0f, 0f, b * 120f);
+                bladeGo.transform.localScale = new Vector3(0.064f, 0.048f, 0.012f);
+                bladeGo.GetComponent<MeshRenderer>().sharedMaterial = atomicMat;
+            }
+
+            // Washed-up sand ridge, mooring chain links, and dried seaweed around base.
+            BoxPart(PrimitiveType.Cylinder, "SandBedMound", mineGo.transform, new Vector3(0.06f, 0.01f, 0f), new Vector3(1.36f, 0.08f, 1.28f), beachSandMat);
+            for (int c = 0; c < 6; c++)
+            {
+                Vector3 linkPos = new Vector3(0.42f + c * 0.14f, 0.045f + (c == 0 ? 0.06f : 0f), Mathf.Sin(c * 0.7f) * 0.05f);
+                var linkGo = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                linkGo.name = $"MooringChain_{c:D2}";
+                UnityEngine.Object.DestroyImmediate(linkGo.GetComponent<Collider>());
+                linkGo.transform.SetParent(mineGo.transform, false);
+                linkGo.transform.localPosition = linkPos;
+                linkGo.transform.localRotation = Quaternion.Euler(c % 2 == 0 ? 18f : 72f, 15f + c * 6f, 0f);
+                linkGo.transform.localScale = new Vector3(0.14f, 0.045f, 0.07f);
+                linkGo.GetComponent<MeshRenderer>().sharedMaterial = rustMat;
+            }
+
+            Vector3[] kelpOffsets =
+            {
+                new Vector3(-0.34f, 0.045f, 0.44f),
+                new Vector3(0.38f, 0.045f, -0.42f),
+                new Vector3(0.54f, 0.045f, 0.24f),
+            };
+            for (int k = 0; k < kelpOffsets.Length; k++)
+            {
+                var kelp = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                kelp.name = $"WashedSeaweed_{k}";
+                UnityEngine.Object.DestroyImmediate(kelp.GetComponent<Collider>());
+                kelp.transform.SetParent(mineGo.transform, false);
+                kelp.transform.localPosition = kelpOffsets[k];
+                kelp.transform.localRotation = Quaternion.Euler(4f, k * 42f + 15f, -3f);
+                kelp.transform.localScale = new Vector3(0.32f, 0.032f, 0.14f);
+                kelp.GetComponent<MeshRenderer>().sharedMaterial = kelpMat;
+            }
+
+            // Inland-facing (+Z outward toward crouch position) angled decipher control hatch positioned clear of the sphere belt.
+            var panelRoot = new GameObject("ControlPanel");
+            panelRoot.transform.SetParent(mineGo.transform, false);
+            panelRoot.transform.localPosition = new Vector3(-0.62f, 0.49f, 0f);
+            panelRoot.transform.localRotation = Quaternion.LookRotation(new Vector3(-0.90f, 0.44f, 0f).normalized, Vector3.up);
+
+            BoxPart(PrimitiveType.Cube, "HatchCollar", panelRoot.transform, new Vector3(0f, 0f, -0.09f), new Vector3(0.54f, 0.40f, 0.16f), ironMat);
+            BoxPart(PrimitiveType.Cube, "HatchBacking", panelRoot.transform, Vector3.zero, new Vector3(0.58f, 0.44f, 0.055f), panelMat);
+            BoxPart(PrimitiveType.Cube, "HazardFrameTop", panelRoot.transform, new Vector3(0f, 0.21f, 0.025f), new Vector3(0.58f, 0.026f, 0.020f), atomicMat);
+            BoxPart(PrimitiveType.Cube, "HazardFrameBottom", panelRoot.transform, new Vector3(0f, -0.21f, 0.025f), new Vector3(0.58f, 0.026f, 0.020f), atomicMat);
+            BoxPart(PrimitiveType.Cube, "HazardFrameLeft", panelRoot.transform, new Vector3(-0.28f, 0f, 0.025f), new Vector3(0.026f, 0.42f, 0.020f), atomicMat);
+            BoxPart(PrimitiveType.Cube, "HazardFrameRight", panelRoot.transform, new Vector3(0.28f, 0f, 0.025f), new Vector3(0.026f, 0.42f, 0.020f), atomicMat);
+
+            // 6 module indicator lights along the top bar.
+            var moduleLights = new Renderer[6];
+            for (int m = 0; m < 6; m++)
+            {
+                float lx = -0.19f + m * 0.076f;
+                BoxPart(PrimitiveType.Cylinder, $"ModuleSocket_{m}", panelRoot.transform, new Vector3(lx, 0.155f, 0.028f), new Vector3(0.044f, 0.012f, 0.044f), steelMat);
+                FindChildByName(panelRoot.transform, $"ModuleSocket_{m}").localRotation = Quaternion.Euler(90f, 0f, 0f);
+
+                var bulb = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+                bulb.name = $"ModuleLight_{m}";
+                UnityEngine.Object.DestroyImmediate(bulb.GetComponent<Collider>());
+                bulb.transform.SetParent(panelRoot.transform, false);
+                bulb.transform.localPosition = new Vector3(lx, 0.155f, 0.039f);
+                bulb.transform.localScale = new Vector3(0.032f, 0.032f, 0.020f);
+                Renderer r = bulb.GetComponent<MeshRenderer>();
+                r.sharedMaterial = m < 2 ? ledRedMat : ledAmberMat;
+                moduleLights[m] = r;
+            }
+
+            // Module 1: 4 physical tumbler drums.
+            BoxPart(PrimitiveType.Cube, "WordBayRecess", panelRoot.transform, new Vector3(-0.11f, 0.065f, 0.026f), new Vector3(0.24f, 0.085f, 0.018f), ironMat);
+            for (int t = 0; t < 4; t++)
+            {
+                float tx = -0.195f + t * 0.056f;
+                BoxPart(PrimitiveType.Cylinder, $"WordTumbler_{t}", panelRoot.transform, new Vector3(tx, 0.065f, 0.039f), new Vector3(0.040f, 0.022f, 0.040f), steelMat);
+                FindChildByName(panelRoot.transform, $"WordTumbler_{t}").localRotation = Quaternion.Euler(0f, 0f, 90f);
+            }
+
+            // Arm/Deactivate guard button beside Word Bay.
+            BoxPart(PrimitiveType.Cylinder, "TimerPlate", panelRoot.transform, new Vector3(0.145f, 0.065f, 0.029f), new Vector3(0.15f, 0.012f, 0.082f), rustMat);
+            FindChildByName(panelRoot.transform, "TimerPlate").localRotation = Quaternion.Euler(90f, 0f, 0f);
+
+            // Module 2: 8 contact toggle switches.
+            BoxPart(PrimitiveType.Cube, "SwitchBusBar", panelRoot.transform, new Vector3(0f, -0.028f, 0.027f), new Vector3(0.49f, 0.082f, 0.016f), ironMat);
+            var switchLevers = new Transform[8];
+            for (int s = 0; s < 8; s++)
+            {
+                float sx = -0.203f + s * 0.058f;
+                BoxPart(PrimitiveType.Cylinder, $"SwitchBase_{s}", panelRoot.transform, new Vector3(sx, -0.028f, 0.036f), new Vector3(0.032f, 0.010f, 0.032f), brassMat);
+                FindChildByName(panelRoot.transform, $"SwitchBase_{s}").localRotation = Quaternion.Euler(90f, 0f, 0f);
+
+                var pivot = new GameObject($"ContactSwitchLever_{s}");
+                pivot.transform.SetParent(panelRoot.transform, false);
+                pivot.transform.localPosition = new Vector3(sx, -0.028f, 0.040f);
+                BoxPart(PrimitiveType.Cube, "Shaft", pivot.transform, new Vector3(0f, 0f, 0.022f), new Vector3(0.014f, 0.014f, 0.044f), steelMat);
+                BoxPart(PrimitiveType.Sphere, "Cap", pivot.transform, new Vector3(0f, 0f, 0.046f), new Vector3(0.024f, 0.024f, 0.024f), atomicMat);
+                switchLevers[s] = pivot.transform;
+            }
+
+            // Modules 3..6: 4 sealed placeholder bays along the bottom row.
+            for (int p = 0; p < 4; p++)
+            {
+                float px = -0.18f + p * 0.12f;
+                BoxPart(PrimitiveType.Cube, $"LockedBay_{p + 3}", panelRoot.transform, new Vector3(px, -0.132f, 0.029f), new Vector3(0.10f, 0.072f, 0.016f), ironMat);
+                BoxPart(PrimitiveType.Cube, $"LockedSeal_{p + 3}", panelRoot.transform, new Vector3(px, -0.132f, 0.038f), new Vector3(0.05f, 0.018f, 0.008f), atomicMat);
+            }
+
+            var seaMine = mineGo.AddComponent<SeaMineBomb>();
+            seaMine.ConfigureVisuals(
+                panelRoot.transform,
+                switchLevers,
+                moduleLights,
+                beaconRenderer,
+                ledRedMat,
+                ledGreenMat,
+                ledAmberMat,
+                new Vector3(-1.38f, 0f, 0f));
+            seaMine.ResetBomb();
+
+            EditorUtility.SetDirty(mineGo);
+            EditorUtility.SetDirty(seaMine);
+            return seaMine;
+        }
+
+        private static Material SeaMineMaterial(string assetName, Color baseColor, float smoothness, float metallic, Color? emission = null)
+        {
+            string path = $"Assets/Props/SeaMine/{assetName}.mat";
+            var mat = AssetDatabase.LoadAssetAtPath<Material>(path);
+            if (mat == null)
+            {
+                mat = new Material(Shader.Find("Universal Render Pipeline/Lit"));
+                AssetDatabase.CreateAsset(mat, path);
+            }
+
+            mat.SetColor("_BaseColor", baseColor);
+            mat.SetFloat("_Smoothness", smoothness);
+            mat.SetFloat("_Metallic", metallic);
+
+            if (emission.HasValue)
+            {
+                mat.EnableKeyword("_EMISSION");
+                mat.SetColor("_EmissionColor", emission.Value);
+            }
+            else
+            {
+                mat.DisableKeyword("_EMISSION");
+                mat.SetColor("_EmissionColor", Color.black);
+            }
+
+            EditorUtility.SetDirty(mat);
+            return mat;
+        }
+
+        private static void VerifySeaMineBomb(SeaMineBomb bomb, CharacterMotor[] motors, Camera cam)
+        {
+            AssertCondition("Sea mine bomb", bomb != null, "Missing AtomBombSeaMine / SeaMineBomb.");
+            AssertCondition("Sea mine bomb", motors != null && motors.Length >= 2 && motors[0] != null && motors[1] != null,
+                "Missing playable CharacterMotors for Olavur and Leivur.");
+            AssertCondition("Sea mine bomb", cam != null, "Missing Camera for sea mine renders.");
+
+            var walkable = UnityEngine.Object.FindAnyObjectByType<WalkableArea>();
+            var party = UnityEngine.Object.FindAnyObjectByType<PartyController>();
+            var cameraRig = cam.GetComponent<ThirdPersonCameraRig>();
+            var mineUi = UnityEngine.Object.FindAnyObjectByType<SeaMineBombUi>();
+
+            AssertCondition("Sea mine bomb", walkable != null && party != null && cameraRig != null && mineUi != null,
+                "Missing WalkableArea, PartyController, ThirdPersonCameraRig, or SeaMineBombUi.");
+
+            AssertCondition("Sea mine bomb", walkable.Contains(bomb.transform.position),
+                $"Expected sea mine {bomb.transform.position} to sit inside WalkableArea Beach zone.");
+            AssertCondition("Sea mine bomb", TrySurfaceY(bomb.transform.position, includeFootpaths: false, out float groundY)
+                && Mathf.Abs(bomb.transform.position.y - groundY) <= 0.05f,
+                $"Expected sea mine Y={bomb.transform.position.y:F2} to rest cleanly on beach sand Y={groundY:F2}.");
+
+            bomb.ResetBomb();
+            AssertCondition("Sea mine bomb", Mathf.Approximately(bomb.RemainingSeconds, SeaMineBomb.DefaultDurationSeconds),
+                $"Expected 1-hour timer (3600s) initially, got {bomb.RemainingSeconds}.");
+            AssertCondition("Sea mine bomb", !bomb.IsDisarmed && !bomb.IsExploded && bomb.TotalModules == 6,
+                "Expected active 6-module bomb before solving.");
+
+            CharacterMotor olavur = motors[0];
+            CharacterMotor leivur = motors[1];
+            CharacterController olavurCc = olavur.GetComponent<CharacterController>();
+            CharacterController leivurCc = leivur.GetComponent<CharacterController>();
+            CharacterItemHolder olavurHolder = olavur.GetComponent<CharacterItemHolder>();
+
+            Vector3 savedOlavurPos = olavur.transform.position;
+            Quaternion savedOlavurRot = olavur.transform.rotation;
+            Vector3 savedLeivurPos = leivur.transform.position;
+            Quaternion savedLeivurRot = leivur.transform.rotation;
+            Vector3 savedCamPos = cam.transform.position;
+            Quaternion savedCamRot = cam.transform.rotation;
+            float savedCamFov = cam.fieldOfView;
+            int savedActiveIdx = party.ActiveIndex;
+
+            try
+            {
+                string previewDir = Path.GetFullPath(Path.Combine(Application.dataPath, "../Docs/preview"));
+                Directory.CreateDirectory(previewDir);
+
+                party.SelectCharacter(0);
+
+                Vector3 standPoint = bomb.GetInspectStandPoint();
+                standPoint.y = SurfaceY(standPoint, includeFootpaths: true);
+                AssertCondition("Sea mine bomb", walkable.Contains(standPoint),
+                    $"Inspect stand point {standPoint} must lie inside WalkableArea.");
+
+                if (olavurCc != null) olavurCc.enabled = false;
+                olavur.transform.position = standPoint;
+                Vector3 toMine = bomb.transform.position - standPoint;
+                toMine.y = 0f;
+                if (toMine.sqrMagnitude > 1e-4f)
+                {
+                    olavur.transform.rotation = Quaternion.LookRotation(toMine.normalized, Vector3.up);
+                }
+
+                if (olavurCc != null) olavurCc.enabled = true;
+                Physics.SyncTransforms();
+
+                AssertCondition("Sea mine bomb", bomb.IsCharacterInReach(olavur),
+                    "Olavur at inspect stand point should be within interaction reach.");
+
+                Transform hips = FindChildByName(olavur.transform, "Hips");
+                AssertCondition("Sea mine bomb", hips != null, "Missing Hips bone on Olavur.");
+                float standingHipsRelY = hips.position.y - olavur.transform.position.y;
+
+                bomb.StartInspection(olavur);
+                olavurHolder?.PoseHeldItem();
+                bomb.ApplyInspectionPose();
+                bomb.SyncInspectionCamera(snapCamera: true);
+                cam.fieldOfView = 56f;
+
+                float bendingHipsRelY = hips.position.y - olavur.transform.position.y;
+                AssertCondition("Sea mine bomb", bomb.IsInspecting(olavur) && cameraRig.IsInspectingOverride,
+                    "Expected Olavur inspecting and camera rig in first-person inspection override.");
+                AssertCondition("Sea mine bomb", bendingHipsRelY < standingHipsRelY - 0.15f,
+                    $"Expected Olavur to bend down while inspecting (standing hips relY={standingHipsRelY:F3}, bending={bendingHipsRelY:F3}).");
+
+                Shot(cam, Path.Combine(previewDir, "village_bomb_firstperson.png"));
+
+                // Switch active player to Leivur so other players observe Olavur bending down over the mine.
+                Vector3 observerPos = walkable.Clamp(standPoint + new Vector3(-2.15f, 0f, 1.55f));
+                observerPos.y = SurfaceY(observerPos, includeFootpaths: true);
+                if (leivurCc != null) leivurCc.enabled = false;
+                leivur.transform.position = observerPos;
+                Vector3 lookAtMine = bomb.transform.position - observerPos;
+                lookAtMine.y = 0f;
+                if (lookAtMine.sqrMagnitude > 1e-4f)
+                {
+                    leivur.transform.rotation = Quaternion.LookRotation(lookAtMine.normalized, Vector3.up);
+                }
+
+                if (leivurCc != null) leivurCc.enabled = true;
+                Physics.SyncTransforms();
+
+                party.SelectCharacter(1);
+                olavurHolder?.PoseHeldItem();
+                bomb.ApplyInspectionPose();
+
+                AssertCondition("Sea mine bomb", bomb.IsInspecting(olavur) && !bomb.IsActiveCharacterInspecting && !cameraRig.IsInspectingOverride,
+                    "Switching to Leivur should exit first-person override while Olavur keeps bending over the mine.");
+
+                foreach (Renderer r in olavur.GetComponentsInChildren<Renderer>(true))
+                {
+                    AssertCondition("Sea mine bomb", r.shadowCastingMode == UnityEngine.Rendering.ShadowCastingMode.On,
+                        $"Expected renderer {r.name} on inspecting companion Olavur to remain visible to other players.");
+                }
+
+                cam.transform.position = standPoint + new Vector3(-0.35f, 1.42f, -2.95f);
+                cam.transform.LookAt(Vector3.Lerp(olavur.transform.position, bomb.transform.position, 0.50f) + Vector3.up * 0.50f);
+                cam.fieldOfView = 50f;
+                Shot(cam, Path.Combine(previewDir, "village_bomb_bending.png"));
+
+                // Verify Module 1 (TØNT), word penalty flash, Module 2 (8 contacts), -60s wrong attempt penalty, and deactivation.
+                AssertCondition("Sea mine bomb", !bomb.TrySubmitWord("TONT")
+                    && Mathf.Approximately(bomb.RemainingSeconds, 3540f)
+                    && bomb.WordPenaltyFlashTimer > 0f,
+                    $"Expected wrong word TONT to deduct 60s and flash red (RemainingSeconds={bomb.RemainingSeconds}, WordFlash={bomb.WordPenaltyFlashTimer}).");
+                AssertCondition("Sea mine bomb", bomb.TrySubmitWord("TØNT")
+                    && bomb.IsWordSolved
+                    && Mathf.Approximately(bomb.WordPenaltyFlashTimer, 0f)
+                    && Mathf.Approximately(bomb.RemainingSeconds, 3540f),
+                    "Expected exact word TØNT to solve Module 1, clear red flash, and incur no penalty.");
+
+                AssertCondition("Sea mine bomb", !bomb.TrySubmitContacts() && Mathf.Approximately(bomb.RemainingSeconds, 3480f),
+                    $"Expected wrong contacts to deduct 60s (RemainingSeconds={bomb.RemainingSeconds}).");
+
+                for (int i = 0; i < SeaMineBomb.DefaultTargetContacts.Length; i++)
+                {
+                    bomb.SetContact(i, SeaMineBomb.DefaultTargetContacts[i]);
+                }
+
+                AssertCondition("Sea mine bomb", bomb.TrySubmitContacts() && bomb.IsContactsSolved && bomb.CanDeactivate,
+                    "Expected target contacts to solve Module 2 and unlock bomb deactivation.");
+                AssertCondition("Sea mine bomb", bomb.TryDeactivate() && bomb.IsDisarmed,
+                    "Expected TryDeactivate() to disarm the bomb once active modules are solved.");
+            }
+            finally
+            {
+                bomb.StopInspection();
+                bomb.ResetBomb();
+                cameraRig.ClearInspectionOverride(snap: false);
+
+                if (olavurCc != null) olavurCc.enabled = false;
+                olavur.transform.SetPositionAndRotation(savedOlavurPos, savedOlavurRot);
+                if (olavurCc != null) olavurCc.enabled = true;
+
+                if (leivurCc != null) leivurCc.enabled = false;
+                leivur.transform.SetPositionAndRotation(savedLeivurPos, savedLeivurRot);
+                if (leivurCc != null) leivurCc.enabled = true;
+
+                Physics.SyncTransforms();
+
+                party.SelectCharacter(savedActiveIdx >= 0 ? savedActiveIdx : 0);
+                olavurHolder?.PoseHeldItem();
+
+                cam.transform.SetPositionAndRotation(savedCamPos, savedCamRot);
+                cam.fieldOfView = savedCamFov;
+                cameraRig.SetOrbit(16f, 18f, 5.6f, snap: true);
+            }
+
+            Debug.Log("[VillageSceneSetup] Sea mine bomb verification: OK (3600s timer, -60s penalty, TØNT + 8 contacts, FP & third-person bending pose)");
+        }
+
+        private static void AssertCondition(string area, bool condition, string message)
+        {
+            if (condition)
+            {
+                return;
+            }
+
+            string full = $"[VillageSceneSetup] {area} verification FAILED: {message}";
+            Debug.LogError(full);
+            throw new System.InvalidOperationException(full);
+        }
+
+        private static void RenderPosedPlayerShot(Camera cam, CharacterMotor player, string filePath)
+        {
+            GameObject clone = UnityEngine.Object.Instantiate(player.gameObject, player.transform.parent);
+            clone.name = player.name + "_PoseShot";
+            player.gameObject.SetActive(false);
+            try
+            {
+                Shot(cam, filePath);
+            }
+            finally
+            {
+                player.gameObject.SetActive(true);
+                UnityEngine.Object.DestroyImmediate(clone);
+            }
+        }
+
+        private static Transform FindChildByName(Transform root, string targetName)
+        {
+            foreach (Transform t in root.GetComponentsInChildren<Transform>(true))
+            {
+                if (t.name == targetName)
+                {
+                    return t;
+                }
+            }
+            return null;
+        }
+
+        private static void AssertDrunkCondition(bool condition, string message)
+        {
+            if (condition)
+            {
+                return;
+            }
+
+            string full = $"[VillageSceneSetup] Drunk verification FAILED: {message}";
+            Debug.LogError(full);
+            throw new System.InvalidOperationException(full);
         }
 
         private static void Shot(Camera cam, string file)

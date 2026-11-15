@@ -31,6 +31,13 @@ namespace Arnafjordur.Editor
         [MenuItem("Arnafjordur/Setup Playable Flat Scene")]
         public static void Run()
         {
+            const string sampleScenePath = "Assets/Scenes/SampleScene.unity";
+            if (EditorSceneManager.GetActiveScene().path != sampleScenePath &&
+                AssetDatabase.LoadAssetAtPath<SceneAsset>(sampleScenePath) != null)
+            {
+                EditorSceneManager.OpenScene(sampleScenePath, OpenSceneMode.Single);
+            }
+
             ConfigureAllModelImporters();
 
             AnimatorController baseController = BuildOrUpdateBaseAnimatorController();
@@ -335,9 +342,17 @@ namespace Arnafjordur.Editor
 
                 CharacterMotor motor = GetOrAdd<CharacterMotor>(instance);
                 motor.Configure(name, animator, ArenaHalfExtent);
+                Transform rightHand = instance.GetComponentsInChildren<Transform>(true).FirstOrDefault(t => t.name == "RightHand");
+                Transform rightLowerArm = instance.GetComponentsInChildren<Transform>(true).FirstOrDefault(t => t.name == "RightLowerArm");
+                Vector3 fistLocal = CharacterItemHolder.ComputeFistCentre(instance.transform, rightHand, rightLowerArm);
+                CharacterItemHolder itemHolder = GetOrAdd<CharacterItemHolder>(instance);
+                itemHolder.Configure(rightHand, fistLocal);
+                CharacterDrunk drunk = GetOrAdd<CharacterDrunk>(instance);
                 EditorUtility.SetDirty(animator);
                 EditorUtility.SetDirty(controller);
                 EditorUtility.SetDirty(motor);
+                EditorUtility.SetDirty(itemHolder);
+                EditorUtility.SetDirty(drunk);
                 motors[i] = motor;
             }
 

@@ -25,20 +25,30 @@ Each intro "director" component loads the next scene through `NextSceneName`, wh
 | 1 | `Intro_TunnelDrive` | `IntroTunnelSceneSetup.cs` | `IntroTunnelDrive.cs`: 20 s drive through the unlit tunnel, cutting between camera shots |
 | 2 | `Intro_TunnelExit` | `IntroTunnelExitSceneSetup.cs` | `IntroPathDrive.cs`: drives the car along waypoints while a roadside camera follows |
 | 3 | `Intro_ChurchArrival` | `IntroChurchArrivalSceneSetup.cs` | `IntroPathDrive.cs`: down the switchbacks into the church forecourt |
-| 4 | `Intro_CarExit` | `IntroCarExitSceneSetup.cs` | `IntroCarExit.cs`: lights off, players climb out and look at the church |
-| 5 | `Arnafjordur_Village` | `VillageSceneSetup.cs` (largest file, ~1600 lines) | the playable village, using `PartyController` and `WalkableArea` |
+| 4 | `Intro_CarExit` | `IntroCarExitSceneSetup.cs` | `IntroCarExit.cs`: lights off, players climb out and stand facing the camera |
+| 5 | `Arnafjordur_Village` | `VillageSceneSetup.cs` (largest file, ~1900 lines; also builds the beach sand, the washed-up `AtomBombSeaMine`, and the `ShoreRocks` out to the boathouse) | the playable village, using `PartyController` and `WalkableArea` |
 | - | `SampleScene` | `SetupPlayableFlatScene.cs` (menu `Arnafjordur/...`) | flat test arena for movement and characters, with `CharacterTestHud` |
 
 These run across all the intro scenes: `IntroMusic.cs` (the car-radio song, which keeps playing between scenes; set up by `IntroMusicSetup.cs`), `BeerDrinker.cs` (seated players sipping beer; set up by `CarBeerSetup.cs`) and `IntroFirstPersonCamera.cs` (V/C first-person cabin view, 1-3/Tab to switch seat).
 
 ## Runtime code: `Assets/Scripts/` (namespace `Arnafjordur.*`)
 - `Characters/CharacterMotor.cs`: movement, rotation and the Animator `Speed` value for one character.
-- `Characters/PartyController.cs`: input (WASD, Shift, click-to-move), switching characters, and Follow/Roam for the companions.
+- `Characters/CharacterDrunk.cs`: tracks beer sips (`BeerBottle`) and drives progressive drunken effects (1 beer slightly buzzed, 2 beers buzzed, 3 beers hard to walk with stumbles, 4+ beers puking and falling), camera offsets, and URP post-processing.
+- `Characters/CharacterItemHolder.cs`: holds, poses, drops, picks up, and uses one `PickupItem` in a character's hand (including drink/sip animation).
+- `Characters/PartyController.cs`: input (WASD, Shift, click-to-move, G/click items, U/Space use item), switching characters, and Follow/Roam for the companions.
+- `Characters/PickupItem.cs`: marks a world object as pickable/droppable/usable with trigger interaction bounds and use callbacks.
+- `Characters/CarTrunk.cs`: opens/closes the Golf's `Tailgate` (T key or click, when the active character is behind the car). Added to the parked car by `VillageSceneSetup`, which also puts a takeable `BeerBox`, `Radio`, and `FishingRod` in the trunk (only pickable while open).
+- `Characters/FishingRod.cs`: telescopic spinning rod stored in the car trunk; expands when picked up and casts a bobber into the fjord or Stórá river (U/Space), detects bites, and reels in fish.
+- `Characters/BeerBottle.cs`: sips left in a beer (5); a dry sip from an empty one makes the character toss it away (added by `CharacterItemHolder` on first sip).
+- `Characters/BeerCrate.cs`: on the beer box; U/Space with an empty hand right by it hands out a copy of the players' bottle (12 in the box).
+- `Characters/RadioPlayer.cs`: the carryable radio; U/Space while held plays the next song or stops. Playlist = every clip in `Assets/Audio/Radio/` (rebuild the village after adding songs).
+- `Characters/SeaMineBomb.cs`: the washed-up Atom Bomb Sea Mine main objective on the beach — 1-hour countdown, `-60s` wrong-attempt penalty, bend-down inspection pose + first-person decipher entry (6 module slots: Module 1 word `TØNT`, Module 2 8 on/off contacts, Modules 3–6 placeholders).
 - `Characters/ThirdPersonCameraRig.cs`: orbit and first-person camera. `SessionFirstPersonPreference` carries over between scenes.
 - `Characters/WalkableArea.cs`: allowed ground (corridors and zones). The motor slides along its edges.
 - `Core/Palette.cs`: **single source of truth for colours.** Use it instead of hard-coded colours (see `Docs/ArtBible.md`).
 - `Core/PlayerAuthBootstrap.cs` (Unity Services anonymous sign-in) and `Core/WebRuntimeConfig.cs` (WebGL frame pacing).
 - `UI/CharacterTestHud.cs`: the HUD in the test scene.
+- `UI/SeaMineBombUi.cs`: top countdown timer badge, proximity prompt, and first-person 6-module decipher panel for `SeaMineBomb`.
 
 ## Editor tools: `Assets/Editor/` (namespace `Arnafjordur.Editor`)
 - Scene builders: see the table above.

@@ -472,8 +472,20 @@ for _nm, _sg, _sh in (("Door_FL", 1, 1.40), ("Door_FR", -1, 1.40), ("Door_RL", 1
     HINGES[_nm] = V(_sg * 0.88, _sh, 0.60)
 
 
+# The tailgate is cut out the same way: everything rear-facing inside the hatch shut line (x, z) drawn further
+# down, from the bumper top (z=0.50) up to the roof. Its hinge sits on the roof edge, found once it is cut.
+TAIL_SHUT = [(0.50, 0.61), (0.62, 0.645), (0.80, 0.665), (0.975, 0.67), (1.06, 0.62), (1.60, 0.58)]
+TAIL_Z0, TAIL_S0 = 0.50, 3.70
+
+
+def in_tailgate(c, margin=0.0):
+    return c.z > TAIL_Z0 + margin and c.y + S_MID > TAIL_S0 and abs(c.x) < lerp_table(TAIL_SHUT, c.z) - margin
+
+
 def door_of(f):
     c, n = f.calc_center_median(), f.normal
+    if n.y > 0.35 and in_tailgate(c):
+        return "Tailgate"
     if abs(n.x) < 0.5 or abs(c.x) < 0.5 or c.z < DOOR_Z0:
         return None
     s = c.y + S_MID
@@ -518,13 +530,15 @@ body = MB()
 glass = MB()
 interior = MB()
 add_shell(body, lambda n: n != "Glass", lambda n: n)
+BODY_SHELL_FACES = len(body.f)          # details (lamps, badge, plate) are added after this and may move to the tailgate
 add_shell(glass, lambda n: n == "Glass", lambda n: "Glass")
 add_shell(interior, lambda n: n != "Glass", lambda n: "Interior", flip=True, offset=0.006)
-for _nm in HINGES:
-    DOORS[_nm] = MB()
-    add_shell(DOORS[_nm], lambda n: n != "Glass", lambda n: n, part=_nm)
-    add_shell(DOORS[_nm], lambda n: n == "Glass", lambda n: "Glass", part=_nm)
-    add_shell(DOORS[_nm], lambda n: n != "Glass", lambda n: "Interior", flip=True, offset=0.006, part=_nm)
+tailgate = MB()
+for _nm in list(HINGES) + ["Tailgate"]:
+    _mb = tailgate if _nm == "Tailgate" else DOORS.setdefault(_nm, MB())
+    add_shell(_mb, lambda n: n != "Glass", lambda n: n, part=_nm)
+    add_shell(_mb, lambda n: n == "Glass", lambda n: "Glass", part=_nm)
+    add_shell(_mb, lambda n: n != "Glass", lambda n: "Interior", flip=True, offset=0.006, part=_nm)
 
 
 # ------------------------------------------------ projection onto the shell
@@ -972,6 +986,9 @@ vs, fs = rbox((1.20, 0.36, 0.02), bevel=0.0, seg=1)
 interior.add(vs, fs, "Interior", xf=T(0, 3.86, 0.93))
 vs, fs = rbox((1.46, 2.55, 0.02), bevel=0.0, seg=1)
 interior.add(vs, fs, "Interior", xf=T(0, 2.62, 0.265))
+# boot floor: a flat carpeted load floor at the bumper sill, so things can sit in the trunk (top at z=0.55)
+vs, fs = rbox((1.02, 0.46, 0.02), bevel=0.0, seg=1)
+interior.add(vs, fs, "SeatBolster", xf=T(0, 3.86, 0.54))
 vs, fs = rbox((0.20, 1.95, 0.13), bevel=0.025)
 interior.add(vs, fs, "Interior", xf=T(0, 2.65, 0.33))
 for mx, ms, mw, ml in ((0.37, 1.78, 0.44, 0.58), (-0.37, 1.78, 0.44, 0.58),
@@ -1247,8 +1264,36 @@ for sg, s_ax, tr in ((1, S_FRONT_AXLE, TRACK_F), (-1, S_FRONT_AXLE, TRACK_F),
     vs, fs = rbox((0.044, 0.072, 0.112), bevel=0.012, seg=2)
     body.add(vs, fs, "AccentBlue", xf=cal_xf)
 
+# ------------------------------------------------------------------- tailgate
+# Rear details that sit on the hatch (inner lamps, badge, GTE badge, plate) move with it.
+_keep_f, _keep_m = body.f[:BODY_SHELL_FACES], body.m[:BODY_SHELL_FACES]
+_moved = {}                                         # body vert index -> tailgate vert index (keeps smooth normals)
+for _f, _m in zip(body.f[BODY_SHELL_FACES:], body.m[BODY_SHELL_FACES:]):
+    _c = sum((body.v[i] for i in _f), Vector((0, 0, 0))) / len(_f)
+    if in_tailgate(_c, margin=0.012):
+        for i in _f:
+            if i not in _moved:
+                _moved[i] = len(tailgate.v)
+                tailgate.v.append(body.v[i])
+        tailgate.f.append([_moved[i] for i in _f])
+        tailgate.m.append(_m)
+    else:
+        _keep_f.append(_f)
+        _keep_m.append(_m)
+_used = sorted({i for f in _keep_f for i in f})
+_remap = {o: n for n, o in enumerate(_used)}
+body.v = [body.v[i] for i in _used]
+body.f = [[_remap[i] for i in f] for f in _keep_f]
+body.m = _keep_m
+# Hinge on the roof edge: the top of the hatch, at its most forward point there.
+_ztop = max(v.z for v in tailgate.v)
+TAIL_HINGE = Vector((0.0, min(v.y for v in tailgate.v if v.z > _ztop - 0.03), _ztop))
+print("tailgate: %d tris, hinge s=%.3f z=%.3f" % (tailgate.tris(), TAIL_HINGE.y + S_MID, TAIL_HINGE.z))
+
 # ================================================================= ASSEMBLE
 objs = []
+tailgate.v = [v - TAIL_HINGE for v in tailgate.v]
+objs.append(new_obj("Tailgate", tailgate.to_mesh("Tailgate", 42), loc=TAIL_HINGE))
 objs.append(new_obj("Body", body.to_mesh("Body", 42)))
 objs.append(new_obj("Glass", glass.to_mesh("Glass", 60)))
 objs.append(new_obj("Interior", interior.to_mesh("Interior", 42)))

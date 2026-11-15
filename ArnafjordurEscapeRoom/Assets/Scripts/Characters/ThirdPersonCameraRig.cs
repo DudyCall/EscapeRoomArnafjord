@@ -45,6 +45,11 @@ namespace Arnafjordur.Characters
         private Camera _camera;
         private Transform _hiddenTarget;
         private CharacterMotor _targetMotor;
+        private bool _hasInspectionOverride;
+        private Transform _inspectionTarget;
+        private Vector3 _inspectionPos;
+        private Quaternion _inspectionRot;
+        private float _inspectionFov = 56f;
 
         /// <summary>Carries the player's first-person preference across runtime scene loads (intro into village).</summary>
         public static bool SessionFirstPersonPreference { get; set; }
@@ -60,6 +65,9 @@ namespace Arnafjordur.Characters
 
         /// <summary>True when first-person view is currently active.</summary>
         public bool IsFirstPerson => firstPerson;
+
+        /// <summary>True when locked into a bent-down close-up inspection view (e.g., sea mine bomb).</summary>
+        public bool IsInspectingOverride => _hasInspectionOverride && target != null && target == _inspectionTarget;
 
         /// <summary>Current horizontal orbit angle in degrees.</summary>
         public float Yaw => yaw;
@@ -85,6 +93,18 @@ namespace Arnafjordur.Characters
             {
                 _targetMotor.LookYawOverride = null;
                 _targetMotor = null;
+            }
+
+            if (_hasInspectionOverride && newTarget != _inspectionTarget)
+            {
+                _hasInspectionOverride = false;
+                _inspectionTarget = null;
+                EnsureCamera();
+                if (!firstPerson && _camera != null)
+                {
+                    _camera.fieldOfView = thirdPersonFov;
+                    _camera.nearClipPlane = 0.15f;
+                }
             }
 
             target = newTarget;
@@ -210,6 +230,57 @@ namespace Arnafjordur.Characters
             }
         }
 
+        /// <summary>Locks the camera into a close-up first-person inspection vantage for <paramref name="inspectTarget"/>.</summary>
+        public void SetInspectionOverride(Transform inspectTarget, Vector3 worldPos, Quaternion worldRot, float fov = 56f, bool snap = true)
+        {
+            _hasInspectionOverride = inspectTarget != null;
+            _inspectionTarget = inspectTarget;
+            _inspectionPos = worldPos;
+            _inspectionRot = worldRot;
+            _inspectionFov = fov;
+
+            if (snap && _hasInspectionOverride)
+            {
+                ApplyTransform();
+            }
+        }
+
+        /// <summary>Releases any active inspection camera lock and restores normal first/third-person framing.</summary>
+        public void ClearInspectionOverride(bool snap = true)
+        {
+            if (!_hasInspectionOverride)
+            {
+                return;
+            }
+
+            _hasInspectionOverride = false;
+            _inspectionTarget = null;
+            EnsureCamera();
+
+            if (!firstPerson)
+            {
+                if (_hiddenTarget != null)
+                {
+                    SetTargetHidden(_hiddenTarget, false);
+                    _hiddenTarget = null;
+                }
+
+                if (_camera != null)
+                {
+                    _camera.fieldOfView = thirdPersonFov;
+                    _camera.nearClipPlane = 0.15f;
+                }
+            }
+
+            if (snap && target != null)
+            {
+                _smoothedFocus = target.position + Vector3.up * targetHeight;
+                _focusVelocity = Vector3.zero;
+                _hasInitializedFocus = true;
+                ApplyTransform();
+            }
+        }
+
         private void Start()
         {
             EnsureCamera();
@@ -270,6 +341,11 @@ namespace Arnafjordur.Characters
 
         private void HandleOrbitAndZoom(float dt)
         {
+            if (IsInspectingOverride)
+            {
+                return;
+            }
+
             Keyboard kb = Keyboard.current;
             if (kb != null && (kb.vKey.wasPressedThisFrame || kb.cKey.wasPressedThisFrame))
             {
@@ -325,6 +401,42 @@ namespace Arnafjordur.Characters
         {
             EnsureCamera();
 
+            CharacterDrunk drunk = _targetMotor != null
+                ? _targetMotor.GetComponent<CharacterDrunk>()
+                : (target != null ? target.GetComponent<CharacterDrunk>() : null);
+            float drunkPitch = 0f;
+            float drunkYaw = 0f;
+            float drunkRoll = 0f;
+            float drunkFov = 0f;
+            Vector3 drunkEyeOffset = Vector3.zero;
+            if (drunk != null)
+            {
+                drunk.GetCameraOffsets(out drunkPitch, out drunkYaw, out drunkRoll, out drunkFov, out drunkEyeOffset);
+            }
+
+            if (IsInspectingOverride)
+            {
+                if (_hiddenTarget != target)
+                {
+                    if (_hiddenTarget != null)
+                    {
+                        SetTargetHidden(_hiddenTarget, false);
+                    }
+
+                    SetTargetHidden(target, true);
+                    _hiddenTarget = target;
+                }
+
+                transform.SetPositionAndRotation(_inspectionPos, _inspectionRot);
+                if (_camera != null)
+                {
+                    _camera.fieldOfView = _inspectionFov;
+                    _camera.nearClipPlane = 0.05f;
+                }
+
+                return;
+            }
+
             if (firstPerson)
             {
                 if (target == null)
@@ -349,26 +461,28 @@ namespace Arnafjordur.Characters
                     _targetMotor.LookYawOverride = yaw;
                 }
 
-                Quaternion fpRot = Quaternion.Euler(pitch, yaw, 0f);
+                Quaternion fpRot = Quaternion.Euler(pitch + drunkPitch, yaw + drunkYaw, drunkRoll);
                 Vector3 forwardFlat = Quaternion.Euler(0f, yaw, 0f) * Vector3.forward;
-                Vector3 eyePos = target.position + Vector3.up * firstPersonEyeHeight + forwardFlat * firstPersonForwardOffset;
+                Vector3 eyePos = target.position + Vector3.up * firstPersonEyeHeight + forwardFlat * firstPersonForwardOffset + drunkEyeOffset;
+                eyePos.y = Mathf.Max(eyePos.y, target.position.y + 0.18f);
                 transform.SetPositionAndRotation(eyePos, fpRot);
                 if (_camera != null)
                 {
-                    _camera.fieldOfView = firstPersonFov;
+                    _camera.fieldOfView = firstPersonFov + drunkFov;
                     _camera.nearClipPlane = 0.05f;
                 }
 
                 return;
             }
 
-            Quaternion rot = Quaternion.Euler(pitch, yaw, 0f);
+            Vector3 focus = _smoothedFocus + Vector3.up * (drunkEyeOffset.y * 0.55f);
+            Quaternion rot = Quaternion.Euler(pitch + drunkPitch, yaw + drunkYaw, drunkRoll);
             Vector3 back = rot * Vector3.back;
             float reach = distance;
             if (avoidObstacles)
             {
                 // Only the static world (mesh colliders) blocks the view: characters and the car do not.
-                int n = Physics.SphereCastNonAlloc(_smoothedFocus, 0.25f, back, Hits, distance,
+                int n = Physics.SphereCastNonAlloc(focus, 0.25f, back, Hits, distance,
                     Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
                 for (int i = 0; i < n; i++)
                 {
@@ -381,11 +495,11 @@ namespace Arnafjordur.Characters
                 reach = Mathf.Max(reach, Mathf.Min(distance, 1.2f));
             }
 
-            Vector3 desiredPosition = _smoothedFocus + back * reach;
+            Vector3 desiredPosition = focus + back * reach;
 
             // Stay above whatever ground is under the camera (the flat test floor sits at 0, the village far below it).
             float floor = float.NegativeInfinity;
-            Vector3 probe = new Vector3(desiredPosition.x, Mathf.Max(desiredPosition.y, _smoothedFocus.y) + 3f, desiredPosition.z);
+            Vector3 probe = new Vector3(desiredPosition.x, Mathf.Max(desiredPosition.y, focus.y) + 3f, desiredPosition.z);
             int below = Physics.RaycastNonAlloc(probe, Vector3.down, Hits, 40f, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
             for (int i = 0; i < below; i++)
             {
@@ -401,6 +515,10 @@ namespace Arnafjordur.Characters
             }
 
             transform.SetPositionAndRotation(desiredPosition, rot);
+            if (_camera != null && thirdPersonFov > 1f)
+            {
+                _camera.fieldOfView = thirdPersonFov + drunkFov;
+            }
         }
 
         private void EnsureCamera()

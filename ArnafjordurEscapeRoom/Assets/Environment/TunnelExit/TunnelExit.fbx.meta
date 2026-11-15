@@ -32,6 +32,11 @@ ModelImporter:
   - first:
       type: UnityEngine:Material
       assembly: UnityEngine.CoreModule
+      name: HouseDoor
+    second: {fileID: 2100000, guid: be648093373f79d44807290f67239b1c, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
       name: HouseGrey
     second: {fileID: 2100000, guid: 2136849e64893c8458c5b1b7a58d0a4f, type: 2}
   - first:
@@ -42,6 +47,16 @@ ModelImporter:
   - first:
       type: UnityEngine:Material
       assembly: UnityEngine.CoreModule
+      name: HouseTeal
+    second: {fileID: 2100000, guid: a8b8ce1a7563c8545aeb1f38fa17be81, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: HouseTimber
+    second: {fileID: 2100000, guid: b454fd81a53b53f4daa238cb0ef2d4ef, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
       name: HouseWhite
     second: {fileID: 2100000, guid: 7e3bc1e4e7c6e574ea53055fbdbea172, type: 2}
   - first:
@@ -49,6 +64,16 @@ ModelImporter:
       assembly: UnityEngine.CoreModule
       name: HouseWindow
     second: {fileID: 2100000, guid: ae322dff9822b5c4288ee43a0cbcd922, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: HouseWindowLit
+    second: {fileID: 2100000, guid: dc41c63b5db70f348bf2fcc712874680, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: HouseYellow
+    second: {fileID: 2100000, guid: 6e4a2de7ad36cc9409ad6a306761492c, type: 2}
   - first:
       type: UnityEngine:Material
       assembly: UnityEngine.CoreModule

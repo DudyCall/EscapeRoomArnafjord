@@ -11,14 +11,13 @@ namespace Arnafjordur.Editor
 {
     /// <summary>
     /// Builds Assets/Scenes/Intro_CarExit.unity: a copy of the church arrival scene with the Golf already parked,
-    /// where Leivur, Andrias and Ólavur get out of the car and stand looking at Árnafjarðar kirkja.
+    /// where Leivur, Andrias and Ólavur get out of the car outside Árnafjarðar kirkja and stand facing the camera.
     /// Also chains Intro_ChurchArrival into it.
     /// </summary>
     public static class IntroCarExitSceneSetup
     {
         private const string ScenePath = "Assets/Scenes/Intro_CarExit.unity";
         private const string ChurchScenePath = "Assets/Scenes/Intro_ChurchArrival.unity";
-        private const string ChurchPathFile = "Assets/Environment/ChurchArrival/ChurchArrivalPath.json";
         private const string SceneName = "Intro_CarExit";
 
         // Car-local layout (metres): x is across the car, z is along it.
@@ -27,12 +26,6 @@ namespace Arnafjordur.Editor
         private const float DoorOpenDegrees = 62f;
         private static readonly string[] SeatOrder = { "Leivur", "Andrias", "Olavur" };
         private static readonly float[] StandTimes = { 1.0f, 1.5f, 2.1f };
-
-        [System.Serializable]
-        private class PathFile
-        {
-            public Vector3 churchPosition;
-        }
 
         [MenuItem("Tools/Intro/Open Car Exit Scene")]
         public static void Open()
@@ -158,15 +151,14 @@ namespace Arnafjordur.Editor
                 report += $"\n  {s.name}: {(door != null ? door.name : "no door")} ({(s.side > 0 ? "right" : "left")}), {route.Count} route points, stands at {route[route.Count - 1]}";
             }
 
-            // ---- everyone ends up looking at the church
-            Vector3 church = JsonUtility.FromJson<PathFile>(File.ReadAllText(ChurchPathFile)).churchPosition;
-            if (church == Vector3.zero) church = car.position + car.forward * 12f;
-
             // ---- camera eases in from the arrival's last frame towards the car and the group
             Vector3 group = spots.Aggregate(Vector3.zero, (a, b) => a + b) / spots.Count + Vector3.up * 1.0f;
             Vector3 lookAt = Vector3.Lerp(car.position + Vector3.up * 0.9f, group, 0.5f);
             Vector3 camEnd = Vector3.Lerp(cam.transform.position, lookAt, 0.4f);
             camEnd.y = Mathf.Max(camEnd.y, Ground(camEnd).y + 1.7f);
+
+            // ---- everyone ends up facing the camera (where it settles), so the shot shows their faces
+            Vector3 faceTarget = camEnd;
 
             // ---- lamps off once parked
             Transform lights = car.Find("Lights");
@@ -181,8 +173,20 @@ namespace Arnafjordur.Editor
             }
 
             var director = new GameObject("IntroCarExit").AddComponent<IntroCarExit>();
-            director.Configure(occupants, church, cam, camEnd, lookAt, cam.fieldOfView,
+            director.Configure(occupants, faceTarget, cam, camEnd, lookAt, cam.fieldOfView,
                 lights != null ? lights.gameObject : null, body, offMats);
+            var tailTf = car.Find("VWGolf/Tailgate");
+            if (tailTf != null && tailTf.TryGetComponent(out MeshRenderer tail))
+            {
+                var tailOff = tail.sharedMaterials;
+                for (int i = 0; i < tailOff.Length; i++)
+                {
+                    if (tailOff[i] == null || !tailOff[i].name.EndsWith("_On")) continue;
+                    var off = AssetDatabase.LoadAssetAtPath<Material>($"Assets/Vehicles/Golf/Materials/{tailOff[i].name.Substring(0, tailOff[i].name.Length - 3)}.mat");
+                    if (off != null) tailOff[i] = off;
+                }
+                director.ConfigureTailgateLights(tail, tailOff);
+            }
             if (File.Exists(VillageSceneSetup.ScenePath)) director.NextSceneName = VillageSceneSetup.SceneName;   // on into the playable village
             EditorUtility.SetDirty(director);
             EditorSceneManager.MarkSceneDirty(scene);

@@ -22,6 +22,7 @@ namespace Arnafjordur.Characters
         private WalkableArea walkableArea;
 
         private CharacterController _controller;
+        private CharacterDrunk _drunk;
         private bool _hasSpeedParam;
         private Vector2 _manualMoveXZ;
         private bool _manualSprint;
@@ -67,6 +68,7 @@ namespace Arnafjordur.Characters
         private void Awake()
         {
             _controller = GetComponent<CharacterController>();
+            TryGetComponent(out _drunk);
             RefreshAnimator();
         }
 
@@ -181,6 +183,12 @@ namespace Arnafjordur.Characters
             }
 
             Vector3 desiredHorizontal = ComputeDesiredVelocity(dt);
+            if (_drunk == null) TryGetComponent(out _drunk);
+            if (_drunk != null)
+            {
+                desiredHorizontal = _drunk.ModifyDesiredVelocity(desiredHorizontal, _manualSprint || _sprintToDestination, dt);
+            }
+
             UpdateFacing(desiredHorizontal, dt);
             float actualPlanarSpeed = MoveCharacter(desiredHorizontal, dt);
             UpdateAnimatorSpeed(actualPlanarSpeed, dt);
@@ -218,10 +226,17 @@ namespace Arnafjordur.Characters
 
         private void UpdateFacing(Vector3 desiredHorizontal, float dt)
         {
+            if (_drunk != null && _drunk.IsIncapacitated)
+            {
+                return;
+            }
+
+            float effectiveTurnSpeed = turnSpeedDeg * (_drunk != null ? _drunk.GetTurnSpeedMultiplier() : 1f);
+
             if (LookYawOverride.HasValue)
             {
                 Quaternion lookRot = Quaternion.Euler(0f, LookYawOverride.Value, 0f);
-                transform.rotation = Quaternion.RotateTowards(transform.rotation, lookRot, turnSpeedDeg * dt);
+                transform.rotation = Quaternion.RotateTowards(transform.rotation, lookRot, effectiveTurnSpeed * dt);
                 return;
             }
 
@@ -231,7 +246,7 @@ namespace Arnafjordur.Characters
             }
 
             Quaternion targetRotation = Quaternion.LookRotation(desiredHorizontal.normalized, Vector3.up);
-            transform.rotation = Quaternion.RotateTowards(transform.rotation, targetRotation, turnSpeedDeg * dt);
+            transform.rotation = Quaternion.RotateTowards(transform.rotation, targetRotation, effectiveTurnSpeed * dt);
         }
 
         private float MoveCharacter(Vector3 desiredHorizontal, float dt)

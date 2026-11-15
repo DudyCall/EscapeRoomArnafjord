@@ -75,9 +75,10 @@ namespace Arnafjordur.Editor
             NewLight(lights, "DashGlow", LightType.Point, new Vector3(0f, 1.0f, 0.42f), new Color(0.62f, 0.74f, 1f), 0.55f, 1.9f);
 
             // Lit lamp lenses on this instance only.
-            var body = golf != null ? golf.Find("Body") : null;
-            if (body != null)
+            foreach (var part in new[] { "Body", "Tailgate" })   // the tailgate carries the inner tail lamps
             {
+                var body = golf != null ? golf.Find(part) : null;
+                if (body == null) continue;
                 var r = body.GetComponent<MeshRenderer>();
                 var mats = r.sharedMaterials;
                 for (int i = 0; i < mats.Length; i++)

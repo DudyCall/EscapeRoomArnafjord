@@ -1,5 +1,6 @@
 using System.IO;
 using System.Linq;
+using Arnafjordur.Characters;
 using Arnafjordur.Intro;
 using UnityEditor;
 using UnityEditor.SceneManagement;
@@ -66,10 +67,13 @@ namespace Arnafjordur.Editor
                     foreach (var old in occ.GetComponents<BeerDrinker>())
                         Object.DestroyImmediate(old);
 
-                    Vector3 fist = FistCentre(occ, hand, lower);
+                    Vector3 fist = CharacterItemHolder.ComputeFistCentre(occ, hand, lower);
                     Transform beer = MakeBottle(glass, label, cap);
                     beer.SetPositionAndRotation(hand.TransformPoint(fist), occ.rotation);
                     beer.SetParent(hand, true);
+                    var pickup = beer.gameObject.AddComponent<PickupItem>();
+                    pickup.Configure("Beer", 0.02f, 0.075f, true, "Drink", true);
+                    pickup.SetCollidersEnabled(false);
 
                     // Between sips the bottle stands on the thigh, close to the body, with the elbow bent.
                     bool hasRest = thigh != null && knee != null;
@@ -98,42 +102,6 @@ namespace Arnafjordur.Editor
             {
                 Debug.LogWarning("[CarBeerSetup] screenshots failed: " + e.Message);
             }
-        }
-
-        /// <summary>
-        /// Centre of the hand's own skin (the vertices that follow the hand bone or its fingers), in hand-bone space.
-        /// The rigs have different hand shapes, so this is measured rather than guessed.
-        /// </summary>
-        private static Vector3 FistCentre(Transform occ, Transform hand, Transform lowerArm)
-        {
-            foreach (var smr in occ.GetComponentsInChildren<SkinnedMeshRenderer>(true))
-            {
-                var bones = smr.bones;
-                int handIndex = System.Array.IndexOf(bones, hand);
-                if (handIndex < 0 || smr.sharedMesh == null) continue;
-                var inHand = new bool[bones.Length];
-                for (int b = 0; b < bones.Length; b++)
-                    inHand[b] = bones[b] != null && (bones[b] == hand || bones[b].IsChildOf(hand));
-
-                Mesh mesh = smr.sharedMesh;
-                Vector3[] verts = mesh.vertices;
-                BoneWeight[] weights = mesh.boneWeights;
-                Matrix4x4 toHand = mesh.bindposes[handIndex];
-                Vector3 sum = Vector3.zero;
-                int count = 0;
-                for (int v = 0; v < weights.Length; v++)
-                {
-                    BoneWeight w = weights[v];
-                    float h = (inHand[w.boneIndex0] ? w.weight0 : 0f) + (inHand[w.boneIndex1] ? w.weight1 : 0f) +
-                              (inHand[w.boneIndex2] ? w.weight2 : 0f) + (inHand[w.boneIndex3] ? w.weight3 : 0f);
-                    if (h < 0.6f) continue;
-                    sum += toHand.MultiplyPoint3x4(verts[v]);
-                    count++;
-                }
-                if (count > 0) return sum / count;
-            }
-            Debug.LogWarning($"[CarBeerSetup] {occ.name}: no hand skin found, guessing the fist position");
-            return hand.InverseTransformPoint(hand.position + (hand.position - lowerArm.position).normalized * 0.08f);
         }
 
         /// <summary>A 33 cl brown bottle, origin at the middle of the body, mouth along +Y.</summary>
@@ -207,7 +175,7 @@ namespace Arnafjordur.Editor
             EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
             var car = (GameObject)PrefabUtility.InstantiatePrefab(AssetDatabase.LoadAssetAtPath<GameObject>(PrefabPath));
             foreach (var t in car.GetComponentsInChildren<Transform>(true))
-                if (t.name == "Body" || t.name == "Glass" || t.name.StartsWith("Door_")) t.gameObject.SetActive(false);
+                if (t.name == "Body" || t.name == "Glass" || t.name == "Tailgate" || t.name.StartsWith("Door_")) t.gameObject.SetActive(false);
             foreach (var d in car.GetComponentsInChildren<BeerDrinker>()) d.Pose(sip);
 
             var lightGo = new GameObject("ShotLight");

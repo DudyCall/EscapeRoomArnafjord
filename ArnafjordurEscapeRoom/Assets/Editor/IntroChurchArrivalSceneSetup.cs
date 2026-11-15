@@ -164,15 +164,20 @@ namespace Arnafjordur.Editor
                 l.spotAngle = 70f;
                 l.innerSpotAngle = 32f;
             }
-            var body = golf.Find("Body").GetComponent<MeshRenderer>();
-            var bodyMats = body.sharedMaterials;
-            for (int i = 0; i < bodyMats.Length; i++)
+            foreach (var part in new[] { "Body", "Tailgate" })   // the tailgate carries the inner tail lamps
             {
-                if (bodyMats[i] == null) continue;
-                var on = AssetDatabase.LoadAssetAtPath<Material>($"Assets/Vehicles/Golf/Materials/{bodyMats[i].name}_On.mat");
-                if (on != null) bodyMats[i] = on;
+                var partTf = golf.Find(part);
+                if (partTf == null) continue;
+                var body = partTf.GetComponent<MeshRenderer>();
+                var bodyMats = body.sharedMaterials;
+                for (int i = 0; i < bodyMats.Length; i++)
+                {
+                    if (bodyMats[i] == null) continue;
+                    var on = AssetDatabase.LoadAssetAtPath<Material>($"Assets/Vehicles/Golf/Materials/{bodyMats[i].name}_On.mat");
+                    if (on != null) bodyMats[i] = on;
+                }
+                body.sharedMaterials = bodyMats;
             }
-            body.sharedMaterials = bodyMats;
 
             // ---- camera + director
             var camGo = new GameObject("IntroCamera");

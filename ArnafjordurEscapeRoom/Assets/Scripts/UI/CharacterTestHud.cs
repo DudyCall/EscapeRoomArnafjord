@@ -23,7 +23,21 @@ namespace Arnafjordur.UI
         private Text _roamLabel;
         private Image _viewBackground;
         private Text _viewLabel;
+        private Image _useBackground;
+        private Text _useLabel;
+        private Image _itemBackground;
+        private Text _itemLabel;
         private Text _statusLabel;
+        private PickupItem _lastNearestItem;
+        private bool _wasUsingItem;
+        private CharacterDrunk.DrunkStage _lastDrunkStage;
+        private int _lastSipsDrunk;
+        private bool _wasIncapacitated;
+        private bool _wasNearBeerCrate;
+        private FishingRod.RodState _lastRodState;
+        private int _lastFishCaught;
+        private bool _wasNearSeaMine;
+        private bool _wasInspectingSeaMine;
         private Font _uiFont;
         private bool _built;
 
@@ -74,6 +88,52 @@ namespace Arnafjordur.UI
             }
 
             RefreshView();
+        }
+
+        private void Update()
+        {
+            if (!_built || party == null)
+            {
+                return;
+            }
+
+            bool usingItem = party.ActiveItemHolder != null && party.ActiveItemHolder.IsUsingItem;
+            CharacterDrunk drunk = party.ActiveCharacter != null ? party.ActiveCharacter.GetComponent<CharacterDrunk>() : null;
+            CharacterDrunk.DrunkStage stage = drunk != null ? drunk.Stage : CharacterDrunk.DrunkStage.Sober;
+            int sipsDrunk = drunk != null ? drunk.SipsDrunk : 0;
+            bool incapacitated = drunk != null && drunk.IsIncapacitated;
+            PickupItem heldItem = party.ActiveHeldItem;
+            FishingRod heldRod = heldItem != null ? heldItem.GetComponent<FishingRod>() : null;
+            FishingRod.RodState rodState = heldRod != null ? heldRod.State : FishingRod.RodState.Idle;
+            int fishCaught = heldRod != null ? heldRod.FishCaughtCount : 0;
+            SeaMineBomb bomb = SeaMineBomb.Active;
+            bool nearSeaMine = bomb != null && party.ActiveCharacter != null && bomb.IsCharacterInReach(party.ActiveCharacter);
+            bool inspectingSeaMine = bomb != null && bomb.IsActiveCharacterInspecting;
+
+            if (usingItem != _wasUsingItem
+                || stage != _lastDrunkStage
+                || sipsDrunk != _lastSipsDrunk
+                || incapacitated != _wasIncapacitated
+                || rodState != _lastRodState
+                || fishCaught != _lastFishCaught
+                || nearSeaMine != _wasNearSeaMine
+                || inspectingSeaMine != _wasInspectingSeaMine)
+            {
+                RefreshView();
+                return;
+            }
+
+            if (heldItem != null)
+            {
+                return;
+            }
+
+            bool nearCrate = party.ActiveCharacter != null && BeerCrate.FindReachable(party.ActiveCharacter.transform.position) != null;
+            PickupItem nearest = party.FindNearestAvailableItem(6f);
+            if (nearest != _lastNearestItem || nearCrate != _wasNearBeerCrate)
+            {
+                RefreshView();
+            }
         }
 
         private void BuildUiIfNeeded()
@@ -139,7 +199,7 @@ namespace Arnafjordur.UI
 
         private void BuildCompanionBar(RectTransform root)
         {
-            GameObject bar = CreatePanel("CompanionBar", root, new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(-20f, -20f), new Vector2(456f, 54f), Palette.UiPanelSlate);
+            GameObject bar = CreatePanel("CompanionBar", root, new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(-20f, -20f), new Vector2(792f, 54f), Palette.UiPanelSlate);
             HorizontalLayoutGroup layout = bar.AddComponent<HorizontalLayoutGroup>();
             layout.padding = new RectOffset(8, 8, 8, 8);
             layout.spacing = 8f;
@@ -156,11 +216,17 @@ namespace Arnafjordur.UI
 
             Button viewBtn = CreateButton("Btn_FirstPerson", bar.transform, "1st Person [V]", out _viewBackground, out _viewLabel);
             viewBtn.onClick.AddListener(() => party?.ToggleFirstPerson());
+
+            Button useBtn = CreateButton("Btn_UseItem", bar.transform, "Use Item [U]", out _useBackground, out _useLabel);
+            useBtn.onClick.AddListener(() => party?.UseActiveItem());
+
+            Button itemBtn = CreateButton("Btn_Item", bar.transform, "No Item [G]", out _itemBackground, out _itemLabel);
+            itemBtn.onClick.AddListener(() => party?.ToggleCarryItem());
         }
 
         private void BuildControlsFooter(RectTransform root)
         {
-            GameObject footer = CreatePanel("ControlsFooter", root, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 18f), new Vector2(1180f, 54f), Palette.UiPanelSlate);
+            GameObject footer = CreatePanel("ControlsFooter", root, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 18f), new Vector2(1460f, 54f), Palette.UiPanelSlate);
 
             _statusLabel = CreateText("ControlsText", footer.transform, 16, TextAnchor.MiddleCenter, Palette.UiTextParchment);
             RectTransform textRect = _statusLabel.rectTransform;
@@ -203,11 +269,89 @@ namespace Arnafjordur.UI
             _viewLabel.color = firstPerson ? Palette.DeepFjordSlate : Palette.UiTextParchment;
             _viewLabel.fontStyle = firstPerson ? FontStyle.Bold : FontStyle.Normal;
 
+            PickupItem held = party != null ? party.ActiveHeldItem : null;
+            PickupItem nearby = held == null && party != null ? party.FindNearestAvailableItem(6f) : null;
+            bool nearCrate = held == null && party != null && party.ActiveCharacter != null
+                && BeerCrate.FindReachable(party.ActiveCharacter.transform.position) != null;
+            _lastNearestItem = nearby;
+            _wasNearBeerCrate = nearCrate;
+            _wasUsingItem = party != null && party.ActiveItemHolder != null && party.ActiveItemHolder.IsUsingItem;
+
+            CharacterDrunk drunk = party != null && party.ActiveCharacter != null ? party.ActiveCharacter.GetComponent<CharacterDrunk>() : null;
+            _lastDrunkStage = drunk != null ? drunk.Stage : CharacterDrunk.DrunkStage.Sober;
+            _lastSipsDrunk = drunk != null ? drunk.SipsDrunk : 0;
+            _wasIncapacitated = drunk != null && drunk.IsIncapacitated;
+            FishingRod heldRod = held != null ? held.GetComponent<FishingRod>() : null;
+            _lastRodState = heldRod != null ? heldRod.State : FishingRod.RodState.Idle;
+            _lastFishCaught = heldRod != null ? heldRod.FishCaughtCount : 0;
+
+            if (held != null)
+            {
+                if (heldRod != null)
+                {
+                    _useLabel.text = $"{heldRod.ActionLabel} {held.DisplayName} [U]";
+                    _useBackground.color = heldRod.State == FishingRod.RodState.Bite ? Palette.UiAccentAmber : Palette.UiConfirmGreen;
+                }
+                else
+                {
+                    bool emptyBottle = held.TryGetComponent(out BeerBottle bottle) && bottle.IsEmpty;
+                    _useLabel.text = _wasUsingItem
+                        ? "Drinking... [U]"
+                        : (emptyBottle ? "Toss Empty Beer [U]" : $"{held.UseVerb} {held.DisplayName} [U]");
+                    _useBackground.color = Palette.UiConfirmGreen;
+                }
+
+                _useLabel.color = Palette.DeepFjordSlate;
+                _useLabel.fontStyle = FontStyle.Bold;
+
+                _itemLabel.text = $"Drop {held.DisplayName} [G]";
+                _itemBackground.color = Palette.UiAccentAmber;
+                _itemLabel.color = Palette.DeepFjordSlate;
+                _itemLabel.fontStyle = FontStyle.Bold;
+            }
+            else if (nearby != null)
+            {
+                _useLabel.text = nearCrate ? "Take Beer [U]" : "Use Item [U]";
+                _useBackground.color = nearCrate ? Palette.UiConfirmGreen : Palette.WetBasalt;
+                _useLabel.color = nearCrate ? Palette.DeepFjordSlate : Palette.UiTextParchment;
+                _useLabel.fontStyle = nearCrate ? FontStyle.Bold : FontStyle.Normal;
+
+                _itemLabel.text = $"Take {nearby.DisplayName} [G]";
+                _itemBackground.color = Palette.UiConfirmGreen;
+                _itemLabel.color = Palette.DeepFjordSlate;
+                _itemLabel.fontStyle = FontStyle.Bold;
+            }
+            else
+            {
+                _useLabel.text = nearCrate ? "Take Beer [U]" : "Use Item [U]";
+                _useBackground.color = nearCrate ? Palette.UiConfirmGreen : Palette.WetBasalt;
+                _useLabel.color = nearCrate ? Palette.DeepFjordSlate : Palette.UiTextParchment;
+                _useLabel.fontStyle = nearCrate ? FontStyle.Bold : FontStyle.Normal;
+
+                _itemLabel.text = "No Item [G]";
+                _itemBackground.color = Palette.WetBasalt;
+                _itemLabel.color = Palette.UiTextParchment;
+                _itemLabel.fontStyle = FontStyle.Normal;
+            }
+
             string activeName = party != null && party.ActiveCharacter != null ? party.ActiveCharacter.DisplayName : "None";
             string viewMode = firstPerson ? "1st Person" : "3rd Person";
+            string heldName = held != null ? held.DisplayName : "None";
+            string fishSegment = heldRod != null && heldRod.FishCaughtCount > 0 ? $"  |  Fish: {heldRod.FishCaughtCount}" : string.Empty;
+            string drunkStatus = drunk != null ? drunk.StatusLabel : "Sober";
+
+            SeaMineBomb bomb = SeaMineBomb.Active;
+            _wasNearSeaMine = bomb != null && party != null && party.ActiveCharacter != null && bomb.IsCharacterInReach(party.ActiveCharacter);
+            _wasInspectingSeaMine = bomb != null && bomb.IsActiveCharacterInspecting;
+
+            string inspectHint = _wasInspectingSeaMine
+                ? "  •  Esc: Stand Up  •  1-3/Tab: Switch Player"
+                : (_wasNearSeaMine ? "  •  E / Click Mine: Inspect Bomb" : string.Empty);
+
             _statusLabel.text =
-                $"Active: {activeName}  |  View: {viewMode}  |  Companions: {mode}   —   " +
-                "WASD/Arrows: Move  •  Shift: Run  •  Click: Move  •  Right-Drag/Q-E: Look  •  Scroll: Zoom  •  V: 1st/3rd  •  1-3/Tab: Switch  •  F/R: Follow/Roam";
+                $"Active: {activeName}  |  View: {viewMode}  |  Companions: {mode}  |  Held: {heldName}{fishSegment}  |  Drunk: {drunkStatus}   —   " +
+                "WASD/Arrows: Move  •  Shift: Run  •  Click: Move  •  Right-Drag/Q-E: Look  •  Scroll: Zoom  •  V: 1st/3rd  •  1-3/Tab: Switch  •  F/R: Follow/Roam  •  U/Space: Use  •  G / Click Item: Drop/Take" +
+                inspectHint;
         }
 
         private GameObject CreatePanel(string name, RectTransform parent, Vector2 anchor, Vector2 pivot, Vector2 anchoredPos, Vector2 size, Color color)

@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using Arnafjordur.Core;
 using Arnafjordur.Intro;
 using UnityEditor;
 using UnityEditor.SceneManagement;
@@ -51,6 +52,14 @@ namespace Arnafjordur.Editor
                 detailImporter.SaveAndReimport();
             }
 
+            var houseDetailImporter = AssetImporter.GetAtPath($"{Dir}/Textures/Exit_House_Detail.png") as TextureImporter;
+            if (houseDetailImporter != null && (houseDetailImporter.sRGBTexture || houseDetailImporter.wrapMode != TextureWrapMode.Repeat))
+            {
+                houseDetailImporter.sRGBTexture = false;
+                houseDetailImporter.wrapMode = TextureWrapMode.Repeat;
+                houseDetailImporter.SaveAndReimport();
+            }
+
             var signsTex = AssetDatabase.LoadAssetAtPath<Texture2D>($"{Dir}/Textures/Exit_Signs_Albedo.png");
             if (signsTex != null)
             {
@@ -90,15 +99,39 @@ namespace Arnafjordur.Editor
             var guardMat = Colour("Mat_Exit_GuardrailMetal", lit, Hex("#8E9499"), 0.55f);
             guardMat.SetFloat("_Metallic", 0.72f);
             remap["GuardrailMetal"] = guardMat;
-            remap["HouseBlack"] = Colour("Mat_Exit_HouseBlack", lit, Hex("#1F2023"), 0.25f);
-            remap["HouseWhite"] = Colour("Mat_Exit_HouseWhite", lit, Hex("#E4E3DC"), 0.25f);
-            remap["HouseRed"] = Colour("Mat_Exit_HouseRed", lit, Hex("#8E2B22"), 0.25f);
-            remap["HouseGrey"] = Colour("Mat_Exit_HouseGrey", lit, Hex("#4C5157"), 0.25f);
+            remap["HouseBlack"] = Colour("Mat_Exit_HouseBlack", lit, Hex("#1B1D20"), 0.22f);
+            remap["HouseWhite"] = Colour("Mat_Exit_HouseWhite", lit, Hex("#ECEFF2"), 0.24f);
+            remap["HouseRed"] = Colour("Mat_Exit_HouseRed", lit, Hex("#6E221F"), 0.24f);
+            remap["HouseGrey"] = Colour("Mat_Exit_HouseGrey", lit, Hex("#D6DADF"), 0.16f);
+            remap["HouseGrey"].SetTexture("_DetailAlbedoMap", null);
+            remap["HouseGrey"].DisableKeyword("_DETAIL_MULX2");
+            EditorUtility.SetDirty(remap["HouseGrey"]);
+            remap["HouseTeal"] = Colour("Mat_Exit_HouseTeal", lit, Hex("#5B8A82"), 0.25f);
+            remap["HouseYellow"] = Colour("Mat_Exit_HouseYellow", lit, Hex("#CFA038"), 0.25f);
+            remap["HouseDoor"] = Colour("Mat_Exit_HouseDoor", lit, Hex("#244632"), 0.35f);
+            remap["HouseTimber"] = Colour("Mat_Exit_HouseTimber", lit, Hex("#5C4E43"), 0.18f);
             remap["HouseWindow"] = Colour("Mat_Exit_HouseWindow", lit, Hex("#1C2B36"), 0.85f);
-            remap["RoofTurf"] = Colour("Mat_Exit_RoofTurf", lit, Hex("#5F7A36"), 0.05f);
-            remap["RoofRed"] = Colour("Mat_Exit_RoofRed", lit, Hex("#9A3A2C"), 0.35f);
-            remap["RoofGrey"] = Colour("Mat_Exit_RoofGrey", lit, Hex("#55595F"), 0.45f);
-            remap["RoofBlack"] = Colour("Mat_Exit_RoofBlack", lit, Hex("#232528"), 0.38f);
+            var litWinMat = Colour("Mat_Exit_HouseWindowLit", lit, Palette.LanternAmber, 0.80f);
+            litWinMat.EnableKeyword("_EMISSION");
+            litWinMat.SetColor("_EmissionColor", Palette.LanternAmber * 0.85f);
+            EditorUtility.SetDirty(litWinMat);
+            remap["HouseWindowLit"] = litWinMat;
+            remap["RoofTurf"] = Colour("Mat_Exit_RoofTurf", lit, Hex("#345645"), 0.22f);
+            remap["RoofRed"] = Colour("Mat_Exit_RoofRed", lit, Hex("#7D2E24"), 0.32f);
+            remap["RoofGrey"] = Colour("Mat_Exit_RoofGrey", lit, Hex("#484D54"), 0.42f);
+            remap["RoofBlack"] = Colour("Mat_Exit_RoofBlack", lit, Hex("#202428"), 0.34f);
+
+            var houseDetailTex = AssetDatabase.LoadAssetAtPath<Texture2D>($"{Dir}/Textures/Exit_House_Detail.png");
+            foreach (var key in new[] { "HouseBlack", "HouseWhite", "HouseRed", "HouseTeal", "HouseYellow", "HouseTimber", "RoofRed", "RoofGrey", "RoofBlack", "RoofTurf" })
+            {
+                if (houseDetailTex == null) break;
+                var m = remap[key];
+                m.SetTexture("_DetailAlbedoMap", houseDetailTex);
+                m.SetTextureScale("_DetailAlbedoMap", Vector2.one);
+                m.SetFloat("_DetailAlbedoMapScale", key.StartsWith("Roof") ? 0.50f : 0.70f);
+                m.EnableKeyword("_DETAIL_MULX2");
+                EditorUtility.SetDirty(m);
+            }
 
             var importer = AssetImporter.GetAtPath($"{Dir}/TunnelExit.fbx") as ModelImporter;
             if (importer == null)
@@ -217,15 +250,20 @@ namespace Arnafjordur.Editor
                 l.spotAngle = 70f;
                 l.innerSpotAngle = 32f;
             }
-            var body = golf.Find("Body").GetComponent<MeshRenderer>();
-            var bodyMats = body.sharedMaterials;
-            for (int i = 0; i < bodyMats.Length; i++)
+            foreach (var part in new[] { "Body", "Tailgate" })   // the tailgate carries the inner tail lamps
             {
-                if (bodyMats[i] == null) continue;
-                var on = AssetDatabase.LoadAssetAtPath<Material>($"Assets/Vehicles/Golf/Materials/{bodyMats[i].name}_On.mat");
-                if (on != null) bodyMats[i] = on;
+                var partTf = golf.Find(part);
+                if (partTf == null) continue;
+                var body = partTf.GetComponent<MeshRenderer>();
+                var bodyMats = body.sharedMaterials;
+                for (int i = 0; i < bodyMats.Length; i++)
+                {
+                    if (bodyMats[i] == null) continue;
+                    var on = AssetDatabase.LoadAssetAtPath<Material>($"Assets/Vehicles/Golf/Materials/{bodyMats[i].name}_On.mat");
+                    if (on != null) bodyMats[i] = on;
+                }
+                body.sharedMaterials = bodyMats;
             }
-            body.sharedMaterials = bodyMats;
 
             // ---- camera + director
             var camGo = new GameObject("IntroCamera");

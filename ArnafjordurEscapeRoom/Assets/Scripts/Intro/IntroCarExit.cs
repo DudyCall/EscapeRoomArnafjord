@@ -7,7 +7,7 @@ namespace Arnafjordur.Intro
 {
     /// <summary>
     /// Final intro beat: the parked car's lights go out and the three players climb out one after another,
-    /// walk round to the camera side of the car and stand looking up at the church.
+    /// walk round to the camera side of the car and stand facing the camera.
     /// </summary>
     public sealed class IntroCarExit : MonoBehaviour
     {
@@ -50,6 +50,8 @@ namespace Arnafjordur.Intro
         [SerializeField] private GameObject headlights;
         [SerializeField] private Renderer bodyRenderer;
         [SerializeField, Tooltip("Body materials with the lamps switched off.")] private Material[] lightsOffMaterials = Array.Empty<Material>();
+        [SerializeField] private Renderer tailgateRenderer;
+        [SerializeField, Tooltip("Tailgate materials with its inner tail lamps switched off.")] private Material[] tailgateLightsOffMaterials = Array.Empty<Material>();
         [SerializeField] private float lightsOffTime = 0.6f;
 
         [Header("Camera (eases in from where the arrival shot ended)")]
@@ -82,7 +84,7 @@ namespace Arnafjordur.Intro
         /// <summary>The players and their routes; each ends up on the last point of their route.</summary>
         public Occupant[] Occupants => occupants;
 
-        /// <summary>World point everyone faces once they have stopped (the church).</summary>
+        /// <summary>World point everyone faces once they have stopped (the camera).</summary>
         public Vector3 FaceTarget => faceTarget;
 
         /// <summary>Raised once when everyone is out and the hold has elapsed.</summary>
@@ -108,6 +110,13 @@ namespace Arnafjordur.Intro
             headlights = headlightRoot;
             bodyRenderer = body;
             lightsOffMaterials = bodyLightsOff ?? Array.Empty<Material>();
+        }
+
+        /// <summary>The tailgate is a separate mesh with its own tail lamps, switched off together with the body's.</summary>
+        public void ConfigureTailgateLights(Renderer tailgate, Material[] lightsOff)
+        {
+            tailgateRenderer = tailgate;
+            tailgateLightsOffMaterials = lightsOff ?? Array.Empty<Material>();
         }
 
         private void Start()
@@ -153,6 +162,7 @@ namespace Arnafjordur.Intro
                 IntroMusic.Stop();              // the radio dies with the ignition
                 if (headlights != null) headlights.SetActive(false);
                 if (bodyRenderer != null && lightsOffMaterials.Length > 0) bodyRenderer.sharedMaterials = lightsOffMaterials;
+                if (tailgateRenderer != null && tailgateLightsOffMaterials.Length > 0) tailgateRenderer.sharedMaterials = tailgateLightsOffMaterials;
             }
 
             bool allArrived = true;

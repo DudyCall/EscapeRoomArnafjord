@@ -32,8 +32,9 @@ namespace Arnafjordur.Characters
 
         private float[] _nextRoamTime = Array.Empty<float>();
         private Vector3 _roamCenter = Vector3.zero;
+        private PickupItem _pendingPickup;
 
-        /// <summary>Fired whenever the active character or companion mode changes.</summary>
+        /// <summary>Fired whenever the active character, companion mode, or carried item changes.</summary>
         public event Action StateChanged;
 
         /// <summary>All party members managed by this controller.</summary>
@@ -44,6 +45,12 @@ namespace Arnafjordur.Characters
 
         /// <summary>Currently player-controlled character motor, or null when unconfigured.</summary>
         public CharacterMotor ActiveCharacter => IsValidIndex(activeIndex) ? characters[activeIndex] : null;
+
+        /// <summary>Item holder attached to the currently controlled character, or null if absent.</summary>
+        public CharacterItemHolder ActiveItemHolder => ActiveCharacter != null ? ActiveCharacter.GetComponent<CharacterItemHolder>() : null;
+
+        /// <summary>Item currently carried by the active character, or null when empty-handed.</summary>
+        public PickupItem ActiveHeldItem => ActiveItemHolder != null ? ActiveItemHolder.HeldItem : null;
 
         /// <summary>Active companion autonomy mode for non-selected party members.</summary>
         public CompanionMode CurrentCompanionMode => companionMode;
@@ -113,6 +120,12 @@ namespace Arnafjordur.Characters
             StateChanged?.Invoke();
         }
 
+        /// <summary>Notifies HUD/listeners when external interaction systems (such as the sea mine) change party state.</summary>
+        public void NotifyExternalStateChanged()
+        {
+            StateChanged?.Invoke();
+        }
+
         private void BindCameraEvents(bool subscribe)
         {
             if (cameraRig == null)
@@ -143,6 +156,7 @@ namespace Arnafjordur.Characters
             HandleHotkeys();
             HandleMovementInput();
             HandlePointerMove();
+            UpdatePendingPickup();
             UpdateCompanions();
         }
 
@@ -156,6 +170,7 @@ namespace Arnafjordur.Characters
                 return;
             }
 
+            _pendingPickup = null;
             CharacterMotor previous = ActiveCharacter;
             if (previous != null)
             {
@@ -235,6 +250,114 @@ namespace Arnafjordur.Characters
             SetCompanionMode(companionMode == CompanionMode.Roam ? CompanionMode.Stay : CompanionMode.Roam);
         }
 
+        /// <summary>Returns the nearest unheld <see cref="PickupItem"/> within <paramref name="maxDistance"/> metres of the active character.</summary>
+        public PickupItem FindNearestAvailableItem(float maxDistance = float.PositiveInfinity)
+        {
+            CharacterMotor active = ActiveCharacter;
+            if (active == null)
+            {
+                return null;
+            }
+
+            Vector3 origin = active.transform.position;
+            PickupItem best = null;
+            float bestDist = maxDistance;
+
+            var items = PickupItem.All;
+            for (int i = 0; i < items.Count; i++)
+            {
+                PickupItem item = items[i];
+                if (item == null || item.IsHeld)
+                {
+                    continue;
+                }
+
+                float dist = PlanarDistance(origin, item.transform.position);
+                if (dist <= bestDist && Mathf.Abs(origin.y - item.transform.position.y) <= 2.5f)
+                {
+                    bestDist = dist;
+                    best = item;
+                }
+            }
+
+            return best;
+        }
+
+        /// <summary>Drops the active character's held item, or picks up (or walks to) the nearest unheld item.</summary>
+        public bool ToggleCarryItem()
+        {
+            _pendingPickup = null;
+            CharacterMotor active = ActiveCharacter;
+            CharacterItemHolder holder = ActiveItemHolder;
+            if (active == null || holder == null)
+            {
+                return false;
+            }
+
+            if (holder.HasItem)
+            {
+                holder.DropHeldItem();
+                StateChanged?.Invoke();
+                return true;
+            }
+
+            PickupItem item = FindNearestAvailableItem(6f);
+            if (item == null)
+            {
+                return false;
+            }
+
+            if (PlanarDistance(active.transform.position, item.transform.position) <= holder.PickupRange)
+            {
+                if (holder.TryPickup(item))
+                {
+                    active.Stop();
+                    StateChanged?.Invoke();
+                    return true;
+                }
+
+                return false;
+            }
+
+            _pendingPickup = item;
+            active.SetDestination(item.transform.position, sprint: false);
+            StateChanged?.Invoke();
+            return true;
+        }
+
+        /// <summary>Uses the active character's currently held item.</summary>
+        public bool UseActiveItem()
+        {
+            CharacterItemHolder holder = ActiveItemHolder;
+            if (holder == null)
+            {
+                return false;
+            }
+
+            if (!holder.HasItem)
+            {
+                // Empty hand right by the beer box: take a bottle from it.
+                CharacterMotor active = ActiveCharacter;
+                BeerCrate crate = active != null ? BeerCrate.FindReachable(active.transform.position) : null;
+                if (crate != null && crate.GiveBeer(holder))
+                {
+                    active.Stop();
+                    StateChanged?.Invoke();
+                    return true;
+                }
+
+                return false;
+            }
+
+            if (holder.TryUseHeldItem())
+            {
+                StateChanged?.Invoke();
+                return true;
+            }
+
+            return false;
+        }
+
         private void HandleHotkeys()
         {
             Keyboard kb = Keyboard.current;
@@ -248,8 +371,27 @@ namespace Arnafjordur.Characters
             else if (kb.digit3Key.wasPressedThisFrame) SelectCharacter(2);
             else if (kb.tabKey.wasPressedThisFrame) CycleCharacter();
 
+            SeaMineBomb bomb = SeaMineBomb.Active;
+            if (bomb != null && bomb.IsActiveCharacterInspecting)
+            {
+                if (kb.escapeKey.wasPressedThisFrame)
+                {
+                    bomb.StopInspection();
+                }
+
+                return;
+            }
+
+            if (kb.eKey.wasPressedThisFrame && bomb != null && bomb.IsCharacterInReach(ActiveCharacter))
+            {
+                bomb.OnInteractRequested(ActiveCharacter);
+                return;
+            }
+
             if (kb.fKey.wasPressedThisFrame) ToggleFollow();
             if (kb.rKey.wasPressedThisFrame) ToggleRoam();
+            if (kb.gKey.wasPressedThisFrame) ToggleCarryItem();
+            if (kb.uKey.wasPressedThisFrame || kb.spaceKey.wasPressedThisFrame) UseActiveItem();
         }
 
         private void HandleMovementInput()
@@ -257,6 +399,12 @@ namespace Arnafjordur.Characters
             CharacterMotor active = ActiveCharacter;
             if (active == null)
             {
+                return;
+            }
+
+            if (SeaMineBomb.Active != null && SeaMineBomb.Active.IsActiveCharacterInspecting)
+            {
+                active.SetManualInput(Vector2.zero, false);
                 return;
             }
 
@@ -283,6 +431,8 @@ namespace Arnafjordur.Characters
             }
 
             moveInput.Normalize();
+            _pendingPickup = null;
+            SeaMineBomb.Active?.CancelPendingApproach(active);
             Camera cam = ResolveCamera();
             Vector3 forward = cam != null ? cam.transform.forward : Vector3.forward;
             Vector3 right = cam != null ? cam.transform.right : Vector3.right;
@@ -299,6 +449,11 @@ namespace Arnafjordur.Characters
         {
             CharacterMotor active = ActiveCharacter;
             if (active == null)
+            {
+                return;
+            }
+
+            if (SeaMineBomb.Active != null && SeaMineBomb.Active.IsActiveCharacterInspecting)
             {
                 return;
             }
@@ -320,12 +475,180 @@ namespace Arnafjordur.Characters
                 return;
             }
 
-            if (TrySampleGroundPoint(cam.ScreenPointToRay(screenPos), out Vector3 worldPoint))
+            Ray ray = cam.ScreenPointToRay(screenPos);
+            Keyboard kb = Keyboard.current;
+            bool sprint = kb != null && (kb.leftShiftKey.isPressed || kb.rightShiftKey.isPressed);
+
+            if (TryFindClickedSeaMine(ray, out SeaMineBomb clickedBomb))
             {
-                Keyboard kb = Keyboard.current;
-                bool sprint = kb != null && (kb.leftShiftKey.isPressed || kb.rightShiftKey.isPressed);
+                _pendingPickup = null;
+                clickedBomb.OnInteractRequested(active);
+                return;
+            }
+
+            CharacterItemHolder holder = ActiveItemHolder;
+            if (holder != null && TryFindClickedPickupItem(ray, out PickupItem clickedItem))
+            {
+                SeaMineBomb.Active?.CancelPendingApproach(active);
+                if (PlanarDistance(active.transform.position, clickedItem.transform.position) <= holder.PickupRange)
+                {
+                    _pendingPickup = null;
+                    active.Stop();
+                    if (holder.TryPickup(clickedItem))
+                    {
+                        StateChanged?.Invoke();
+                    }
+                }
+                else
+                {
+                    _pendingPickup = clickedItem;
+                    active.SetDestination(clickedItem.transform.position, sprint);
+                }
+
+                return;
+            }
+
+            if (TrySampleGroundPoint(ray, out Vector3 worldPoint))
+            {
+                _pendingPickup = null;
+                SeaMineBomb.Active?.CancelPendingApproach(active);
                 active.SetDestination(worldPoint, sprint);
             }
+        }
+
+        private void UpdatePendingPickup()
+        {
+            if (_pendingPickup == null)
+            {
+                return;
+            }
+
+            CharacterMotor active = ActiveCharacter;
+            CharacterItemHolder holder = ActiveItemHolder;
+            if (active == null || holder == null || _pendingPickup.IsHeld)
+            {
+                _pendingPickup = null;
+                return;
+            }
+
+            if (PlanarDistance(active.transform.position, _pendingPickup.transform.position) <= holder.PickupRange)
+            {
+                PickupItem item = _pendingPickup;
+                _pendingPickup = null;
+                active.Stop();
+                if (holder.TryPickup(item))
+                {
+                    StateChanged?.Invoke();
+                }
+
+                return;
+            }
+
+            if (!active.HasDestination)
+            {
+                _pendingPickup = null;
+            }
+        }
+
+        private static bool TryFindClickedSeaMine(Ray ray, out SeaMineBomb clickedBomb)
+        {
+            RaycastHit[] hits = Physics.RaycastAll(ray, 160f, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Collide);
+            if (hits != null && hits.Length > 0)
+            {
+                Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
+                for (int i = 0; i < hits.Length; i++)
+                {
+                    Collider col = hits[i].collider;
+                    if (col == null)
+                    {
+                        continue;
+                    }
+
+                    SeaMineBomb bomb = col.GetComponentInParent<SeaMineBomb>();
+                    if (bomb != null)
+                    {
+                        clickedBomb = bomb;
+                        return true;
+                    }
+
+                    if (!col.isTrigger && col.GetComponentInParent<CharacterMotor>() == null)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            clickedBomb = null;
+            return false;
+        }
+
+        private static bool TryFindClickedPickupItem(Ray ray, out PickupItem clickedItem)
+        {
+            RaycastHit[] hits = Physics.RaycastAll(ray, 160f, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Collide);
+            if (hits != null && hits.Length > 0)
+            {
+                Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
+                for (int i = 0; i < hits.Length; i++)
+                {
+                    Collider col = hits[i].collider;
+                    if (col == null)
+                    {
+                        continue;
+                    }
+
+                    PickupItem item = col.GetComponentInParent<PickupItem>();
+                    if (item != null && !item.IsHeld)
+                    {
+                        clickedItem = item;
+                        return true;
+                    }
+
+                    if (!col.isTrigger && col.GetComponentInParent<CharacterMotor>() == null)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            if (TrySampleGroundPoint(ray, out Vector3 groundPoint))
+            {
+                const float ClickProximity = 0.28f;
+                PickupItem best = null;
+                float bestDist = ClickProximity;
+
+                var items = PickupItem.All;
+                for (int i = 0; i < items.Count; i++)
+                {
+                    PickupItem item = items[i];
+                    if (item == null || item.IsHeld)
+                    {
+                        continue;
+                    }
+
+                    float dist = PlanarDistance(groundPoint, item.transform.position);
+                    if (dist <= bestDist && Mathf.Abs(groundPoint.y - item.transform.position.y) <= 0.6f)
+                    {
+                        bestDist = dist;
+                        best = item;
+                    }
+                }
+
+                if (best != null)
+                {
+                    clickedItem = best;
+                    return true;
+                }
+            }
+
+            clickedItem = null;
+            return false;
+        }
+
+        private static float PlanarDistance(Vector3 a, Vector3 b)
+        {
+            float dx = a.x - b.x;
+            float dz = a.z - b.z;
+            return Mathf.Sqrt(dx * dx + dz * dz);
         }
 
         private static bool TryGetPrimaryPointerClick(out Vector2 screenPosition, out int pointerId)
@@ -359,7 +682,10 @@ namespace Arnafjordur.Characters
                 Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
                 for (int i = 0; i < hits.Length; i++)
                 {
-                    if (hits[i].collider != null && hits[i].collider.GetComponentInParent<CharacterMotor>() == null)
+                    Collider col = hits[i].collider;
+                    if (col != null &&
+                        col.GetComponentInParent<CharacterMotor>() == null &&
+                        col.GetComponentInParent<PickupItem>() == null)
                     {
                         worldPoint = hits[i].point;
                         return true;
@@ -392,6 +718,12 @@ namespace Arnafjordur.Characters
                 CharacterMotor companion = characters[i];
                 if (i == activeIndex || companion == null)
                 {
+                    continue;
+                }
+
+                if (SeaMineBomb.Active != null && SeaMineBomb.Active.IsInspecting(companion))
+                {
+                    companion.Stop();
                     continue;
                 }
 
