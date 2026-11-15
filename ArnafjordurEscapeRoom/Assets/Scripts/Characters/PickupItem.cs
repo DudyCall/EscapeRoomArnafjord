@@ -26,8 +26,12 @@ namespace Arnafjordur.Characters
         private float gripBelowCentre = 0.02f;
         [SerializeField, Tooltip("Optional local Euler offset applied while carried in the hand.")]
         private Vector3 heldEulerOffset = Vector3.zero;
+        [SerializeField, Tooltip("Optional offset in the carried hand frame (X=forward, Y=up, Z=right) applied while held.")]
+        private Vector3 heldLocalOffset = Vector3.zero;
         [SerializeField, Tooltip("Keep the item's +Y axis aligned with the character's up axis while carried.")]
         private bool keepUpright = true;
+        [SerializeField, Tooltip("Carried across the body in both hands (wood, planks) instead of in the right fist.")]
+        private bool twoHanded;
         [SerializeField, Tooltip("Height of the item's origin above the ground when dropped. Negative auto-measures from renderers.")]
         private float groundClearance = -1f;
         [SerializeField] private float interactionRadius = 0.16f;
@@ -55,8 +59,24 @@ namespace Arnafjordur.Characters
         /// <summary>Optional local Euler offset applied while carried in the hand.</summary>
         public Vector3 HeldEulerOffset => heldEulerOffset;
 
+        /// <summary>Optional offset in the carried hand frame (X=forward, Y=up, Z=right) applied while held.</summary>
+        public Vector3 HeldLocalOffset => heldLocalOffset;
+
+        /// <summary>Builder hook for fine-tuning how an item sits and faces in the hand.</summary>
+        public void SetHeldPose(Vector3 localOffset, Vector3 eulerOffset)
+        {
+            heldLocalOffset = localOffset;
+            heldEulerOffset = eulerOffset;
+        }
+
         /// <summary>True when the item stays upright relative to the character while carried.</summary>
         public bool KeepUpright => keepUpright;
+
+        /// <summary>True for long, heavy things held crosswise in both hands.</summary>
+        public bool TwoHanded => twoHanded;
+
+        /// <summary>Builder hook for <see cref="TwoHanded"/>.</summary>
+        public void SetTwoHanded(bool value) => twoHanded = value;
 
         /// <summary>Character currently holding this item, or null when resting in the world.</summary>
         public CharacterItemHolder Holder { get; private set; }

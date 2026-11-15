@@ -808,7 +808,7 @@ for side in ("left", "right"):
 
 
 # ------------------------------------------------------------ number plates
-def plate(kind, z, text="AF 215"):
+def plate(kind, z, text="DG 946"):
     m = surface_frame(kind, 0.0, z, lift=0.010)
     nz = m.to_3x3() @ Vector((0, 0, 1))
     vs, fs = rbox((0.52, 0.11, 0.012), bevel=0.003, seg=1)

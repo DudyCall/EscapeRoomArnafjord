@@ -35,6 +35,7 @@ namespace Arnafjordur.Editor
             "Exit_Terrain",
             "Exit_Road",
             "ChurchForecourt",
+            "ChurchParkingApron",
             "VillageBeach",
         };
 
@@ -145,6 +146,9 @@ namespace Arnafjordur.Editor
             BuildShoreRocks(walkableData.seaLevel);
             SeaMineBomb seaMine = BuildSeaMineBomb(walkableData.seaLevel);
             Physics.SyncTransforms();
+            BuildBeachPebbles(walkableData.seaLevel, seaMine != null ? seaMine.transform.position : Vector3.positiveInfinity);
+            Physics.SyncTransforms();
+            BuildBeachWood(walkableData.seaLevel, seaMine != null ? seaMine.transform.position : Vector3.positiveInfinity);
             var walkableArea = BuildWalkableAndFootpaths(walkableData);
             FjordWaterSetup.ApplyToExisting();
 
@@ -577,6 +581,8 @@ namespace Arnafjordur.Editor
             var footpathsRoot = new GameObject("VillageFootpaths") { isStatic = true };
             Material gravelMat = AssetDatabase.LoadAssetAtPath<Material>(GravelMatPath);
 
+            BuildChurchParkingApron(data, footpathsRoot.transform, gravelMat);
+
             if (data.footpaths != null)
             {
                 foreach (FootpathData fp in data.footpaths)
@@ -644,6 +650,154 @@ namespace Arnafjordur.Editor
             }
 
             return result.ToArray();
+        }
+
+        /// <summary>
+        /// Builds a wide, gently sloped gravel parking apron connecting the church parking bay
+        /// directly down to VillageRoad so players can exit anywhere along the parking area.
+        /// </summary>
+        private static void BuildChurchParkingApron(WalkableFile data, Transform parent, Material gravelMat)
+        {
+            ZoneData zone = data.zones?.FirstOrDefault(z => z.name == "ChurchParking");
+            Vector3[] bay = data.corridors?.FirstOrDefault(c => c.name == "ParkingBay")?.points;
+            Vector3[] driveway = data.corridors?.FirstOrDefault(c => c.name == "ChurchDriveway")?.points;
+            Vector3[] road = data.corridors?.FirstOrDefault(c => c.name == "VillageRoad")?.points;
+            if (zone == null || zone.outline == null || zone.outline.Length < 3 || bay == null || road == null)
+            {
+                return;
+            }
+
+            Vector3[] upperLine = driveway != null ? driveway.Concat(bay).ToArray() : bay;
+            const float Step = 0.75f;
+            float xMin = zone.outline.Min(p => p.x) - Step * 2f;
+            float xMax = zone.outline.Max(p => p.x) + Step * 2f;
+            float zMin = zone.outline.Min(p => p.z) - Step * 2f;
+            float zMax = zone.outline.Max(p => p.z) + Step * 2f;
+
+            int nx = Mathf.CeilToInt((xMax - xMin) / Step) + 1;
+            int nz = Mathf.CeilToInt((zMax - zMin) / Step) + 1;
+            var inside = new bool[nx * nz];
+            var verts = new Vector3[nx * nz];
+            var uvs = new Vector2[nx * nz];
+
+            for (int j = 0; j < nz; j++)
+            {
+                float z = zMin + j * Step;
+                for (int i = 0; i < nx; i++)
+                {
+                    float x = xMin + i * Step;
+                    int idx = j * nx + i;
+                    bool inZone = PointInPolygonXZ(x, z, zone.outline);
+                    inside[idx] = inZone;
+
+                    float groundY = SurfaceY(new Vector3(x, 0f, z), includeFootpaths: false);
+                    float y;
+                    if (inZone)
+                    {
+                        ClosestOnPolyline(x, z, upperLine, out float dBay, out float yBay);
+                        ClosestOnPolyline(x, z, road, out float dRoad, out float yRoad);
+                        float t = dBay / Mathf.Max(0.001f, dBay + dRoad);
+                        y = Mathf.Lerp(yBay, yRoad, Mathf.SmoothStep(0f, 1f, t));
+                        if (dBay < 2.2f)
+                        {
+                            y = Mathf.Min(y, yBay - 0.015f);
+                        }
+                        else if (dRoad < 1.6f)
+                        {
+                            y = Mathf.Min(y, yRoad - 0.02f);
+                        }
+                        else
+                        {
+                            y = Mathf.Max(y, groundY + 0.04f);
+                        }
+                    }
+                    else
+                    {
+                        y = groundY - 0.35f;
+                    }
+
+                    verts[idx] = new Vector3(x, y, z);
+                    uvs[idx] = new Vector2((x - xMin) / 4f, (z - zMin) / 4f);
+                }
+            }
+
+            var tris = new List<int>(nx * nz * 6);
+            for (int j = 0; j < nz - 1; j++)
+            {
+                for (int i = 0; i < nx - 1; i++)
+                {
+                    int a = j * nx + i;
+                    int b = a + 1;
+                    int c = a + nx;
+                    int d = c + 1;
+                    if (!inside[a] && !inside[b] && !inside[c] && !inside[d])
+                    {
+                        continue;
+                    }
+
+                    tris.Add(a);
+                    tris.Add(c);
+                    tris.Add(d);
+                    tris.Add(a);
+                    tris.Add(d);
+                    tris.Add(b);
+                }
+            }
+
+            var mesh = new Mesh { name = "ChurchParkingApron" };
+            mesh.vertices = verts;
+            mesh.uv = uvs;
+            mesh.triangles = tris.ToArray();
+            mesh.RecalculateNormals();
+            mesh.RecalculateBounds();
+
+            string meshPath = $"{VillageAssetDir}/ChurchParkingApron.asset";
+            AssetDatabase.DeleteAsset(meshPath);
+            AssetDatabase.CreateAsset(mesh, meshPath);
+
+            var go = new GameObject("ChurchParkingApron") { isStatic = true };
+            go.transform.SetParent(parent, false);
+            go.AddComponent<MeshFilter>().sharedMesh = mesh;
+            var renderer = go.AddComponent<MeshRenderer>();
+            renderer.sharedMaterial = gravelMat;
+            renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            go.AddComponent<MeshCollider>().sharedMesh = mesh;
+        }
+
+        private static void ClosestOnPolyline(float x, float z, Vector3[] line, out float bestDist, out float bestY)
+        {
+            bestDist = float.MaxValue;
+            bestY = 0f;
+            Vector2 p = new Vector2(x, z);
+            for (int k = 0; k < line.Length - 1; k++)
+            {
+                Vector2 a = new Vector2(line[k].x, line[k].z);
+                Vector2 b = new Vector2(line[k + 1].x, line[k + 1].z);
+                Vector2 ab = b - a;
+                float t = ab.sqrMagnitude < 1e-6f ? 0f : Mathf.Clamp01(Vector2.Dot(p - a, ab) / ab.sqrMagnitude);
+                float d = Vector2.Distance(p, a + ab * t);
+                if (d < bestDist)
+                {
+                    bestDist = d;
+                    bestY = Mathf.Lerp(line[k].y, line[k + 1].y, t);
+                }
+            }
+        }
+
+        private static bool PointInPolygonXZ(float x, float z, Vector3[] poly)
+        {
+            bool inside = false;
+            for (int i = 0, j = poly.Length - 1; i < poly.Length; j = i++)
+            {
+                float xi = poly[i].x, zi = poly[i].z;
+                float xj = poly[j].x, zj = poly[j].z;
+                if (((zi > z) != (zj > z)) && (x < (xj - xi) * (z - zi) / (zj - zi + 1e-9f) + xi))
+                {
+                    inside = !inside;
+                }
+            }
+
+            return inside;
         }
 
         private static Vector3[] BuildFootpathMeshAndGetPoints(FootpathData fp, Transform parent, Material gravelMat)
@@ -850,8 +1004,8 @@ namespace Arnafjordur.Editor
         /// </summary>
         private static bool RaiseToRoadEdge(ref Vector3 w, Vector3[] road)
         {
-            const float RoadHalf = 1.8f, Reach = 7f, BankSlope = 0.6f, Under = 0.12f, MaxGap = 2.5f;
-            if (road == null || road.Length < 2 || w.x < 370f || w.x > 430f || w.z < 316f || w.z > 410f)
+            const float RoadHalf = 1.8f, Reach = 11f, BankSlope = 0.35f, Under = 0.12f, MaxGap = 3.5f;
+            if (road == null || road.Length < 2 || w.x < 375f || w.x > 418f || w.z < 276f || w.z > 445f || (w.z >= 301f && w.z <= 311.5f))
             {
                 return false;
             }
@@ -1529,6 +1683,672 @@ namespace Arnafjordur.Editor
             Debug.Log($"[VillageSceneSetup] Shore rocks: {dark.Count + light.Count} rocks, {combined.vertexCount} verts.");
         }
 
+        private const string BeachPebbleMeshPath = VillageAssetDir + "/BeachPebbles.asset";
+
+        /// <summary>
+        /// 20 hand-sized stones scattered on the dry sand. Each is its own <see cref="PickupItem"/> so the
+        /// players can pick them up, carry and drop them like any other item.
+        /// </summary>
+        private static void BuildBeachPebbles(float sea, Vector3 avoid)
+        {
+            GameObject existing = GameObject.Find("BeachPebbles");
+            if (existing != null) UnityEngine.Object.DestroyImmediate(existing);
+
+            var rng = new System.Random(2077);
+            float R() => (float)rng.NextDouble();
+
+            // keep the shapes in one asset so the scene can reference them after the rebuild
+            AssetDatabase.DeleteAsset(BeachPebbleMeshPath);
+            var shapes = new List<Mesh>();
+            for (int i = 0; i < 5; i++)
+            {
+                Mesh m = MakeRockPrototype(rng);
+                m.name = $"BeachPebble_{i}";
+                if (i == 0) AssetDatabase.CreateAsset(m, BeachPebbleMeshPath);
+                else AssetDatabase.AddObjectToAsset(m, BeachPebbleMeshPath);
+                shapes.Add(m);
+            }
+
+            Material mat = RockMaterial(ShoreRockLightMatPath, "Mat_ShoreRock_Weathered", Color.Lerp(Palette.WetBasalt, Palette.HarbourConcrete, 0.25f) * 0.8f, 0.15f);
+            var root = new GameObject("BeachPebbles");
+            int placed = 0;
+            for (int attempt = 0; attempt < 400 && placed < 20; attempt++)
+            {
+                float z = Mathf.Lerp(316f, 392f, R());
+                GetBeachEnvelope(z, out float xTop, out float xShore);
+                float x = Mathf.Lerp(xTop + 1.5f, xShore - 2.5f, R());
+                if (new Vector2(x - avoid.x, z - avoid.z).sqrMagnitude < 9f) continue;   // leave the sea mine clear
+                if (!Physics.Raycast(new Vector3(x, 60f, z), Vector3.down, out RaycastHit hit, 200f, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore)
+                    || hit.collider.name != "VillageBeach" || hit.point.y < sea + 0.3f)
+                {
+                    continue;   // only on dry sand, not on rocks, props or in the water
+                }
+
+                float size = Mathf.Lerp(0.14f, 0.24f, R());
+                var scale = new Vector3(size * Mathf.Lerp(0.9f, 1.3f, R()), size * Mathf.Lerp(0.55f, 0.8f, R()), size * Mathf.Lerp(0.9f, 1.25f, R()));
+                var go = new GameObject($"BeachPebble_{placed + 1:00}");
+                go.transform.SetParent(root.transform, false);
+                go.transform.SetPositionAndRotation(hit.point + Vector3.up * scale.y * 0.3f, Quaternion.Euler(0f, R() * 360f, 0f));
+                go.transform.localScale = scale;
+                Mesh shape = shapes[rng.Next(shapes.Count)];
+                go.AddComponent<MeshFilter>().sharedMesh = shape;
+                go.AddComponent<MeshRenderer>().sharedMaterial = mat;
+                go.AddComponent<MeshCollider>().sharedMesh = shape;
+                go.GetComponent<MeshCollider>().convex = true;
+                go.AddComponent<PickupItem>().Configure("Stone", 0f, scale.y * 0.3f, false, "Use", false);
+                placed++;
+            }
+
+            Debug.Log($"[VillageSceneSetup] Beach pebbles: {placed} pickable stones.");
+        }
+
+        /// <summary>
+        /// Each friend carries something of their own, hidden until taken out with I. Andrias: cigarettes and a lighter.
+        /// </summary>
+        private static void BuildPocketItems(string character, Transform charTransform)
+        {
+            var oldPockets = charTransform.GetComponent<CharacterPockets>();
+            if (oldPockets != null)
+            {
+                foreach (PickupItem old in oldPockets.Items.ToArray()) if (old != null) UnityEngine.Object.DestroyImmediate(old.gameObject);
+                UnityEngine.Object.DestroyImmediate(oldPockets);
+            }
+
+            if (character != "Andrias") return;
+            var pockets = charTransform.gameObject.AddComponent<CharacterPockets>();
+            pockets.Add(BuildCigarettePack());
+            pockets.Add(BuildLighter());
+            EditorUtility.SetDirty(pockets);
+        }
+
+        private const string PocketMeshPath = VillageAssetDir + "/PocketItems.asset";
+        private const string CigPackLabelPath = VillageAssetDir + "/CigPack_Label.png";
+
+        /// <summary>Saves a generated mesh into the shared pocket-items asset so the scene keeps it.</summary>
+        private static Mesh KeepPocketMesh(Mesh mesh)
+        {
+            if (AssetDatabase.LoadMainAssetAtPath(PocketMeshPath) == null) AssetDatabase.CreateAsset(mesh, PocketMeshPath);
+            else AssetDatabase.AddObjectToAsset(mesh, PocketMeshPath);
+            return mesh;
+        }
+
+        private static GameObject PocketPart(string name, Transform parent, Mesh mesh, Material mat, Vector3 localPos, Vector3? scale = null, Quaternion? rot = null)
+        {
+            var go = new GameObject(name);
+            go.transform.SetParent(parent, false);
+            go.transform.localPosition = localPos;
+            go.transform.localRotation = rot ?? Quaternion.identity;
+            go.transform.localScale = scale ?? Vector3.one;
+            go.AddComponent<MeshFilter>().sharedMesh = mesh;
+            go.AddComponent<MeshRenderer>().sharedMaterial = mat;
+            return go;
+        }
+
+        /// <summary>Plain URP Lit material for small props (no terrain detail texture, unlike the rocks).</summary>
+        private static Material PropMaterial(string file, Color color, float smoothness, float metallic = 0f, Texture2D albedo = null)
+        {
+            string path = VillageAssetDir + "/" + file + ".mat";
+            var mat = AssetDatabase.LoadAssetAtPath<Material>(path);
+            if (mat == null)
+            {
+                mat = new Material(Shader.Find("Universal Render Pipeline/Lit")) { name = file };
+                AssetDatabase.CreateAsset(mat, path);
+            }
+
+            color.a = 1f;
+            mat.SetColor("_BaseColor", color);
+            mat.SetTexture("_BaseMap", albedo);
+            mat.SetFloat("_Smoothness", smoothness);
+            mat.SetFloat("_Metallic", metallic);
+            EditorUtility.SetDirty(mat);
+            return mat;
+        }
+
+        /// <summary>Additive glowing material for the lighter flame (bright enough to catch the bloom).</summary>
+        private static Material FlameMaterial(string file, Color color, float intensity)
+        {
+            string path = VillageAssetDir + "/" + file + ".mat";
+            var mat = AssetDatabase.LoadAssetAtPath<Material>(path);
+            if (mat == null)
+            {
+                mat = new Material(Shader.Find("Universal Render Pipeline/Unlit")) { name = file };
+                AssetDatabase.CreateAsset(mat, path);
+            }
+
+            mat.SetFloat("_Surface", 1f);
+            mat.SetFloat("_Blend", 2f);
+            mat.SetFloat("_SrcBlend", (float)UnityEngine.Rendering.BlendMode.One);
+            mat.SetFloat("_DstBlend", (float)UnityEngine.Rendering.BlendMode.One);
+            mat.SetFloat("_ZWrite", 0f);
+            mat.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
+            mat.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent;
+            mat.SetOverrideTag("RenderType", "Transparent");
+            Color c = color * intensity;
+            c.a = 1f;
+            mat.SetColor("_BaseColor", c);
+            EditorUtility.SetDirty(mat);
+            return mat;
+        }
+
+        /// <summary>
+        /// A box with rounded vertical edges (rounded-rectangle cross-section in XZ, extruded along Y), centred on
+        /// its pivot. Side UVs wrap the perimeter (u 0..1 starting at the front-left corner, front → right → back →
+        /// left) and v runs <paramref name="v0"/>..<paramref name="v1"/> so stacked parts share one label texture.
+        /// Caps sample the texture at (<paramref name="capU"/>, v0/v1).
+        /// </summary>
+        private static Mesh RoundedPrism(string name, float w, float h, float d, float r, int cornerSegs, float v0 = 0f, float v1 = 1f, float capU = 0.125f)
+        {
+            r = Mathf.Min(r, Mathf.Min(w, d) * 0.5f - 0.0001f);
+            var ring = new List<Vector3>();
+            // corners in order: front-left, front-right, back-right, back-left (front is -Z, facing the viewer)
+            var centres = new[]
+            {
+                new Vector2(-w * 0.5f + r, -d * 0.5f + r), new Vector2(w * 0.5f - r, -d * 0.5f + r),
+                new Vector2(w * 0.5f - r, d * 0.5f - r), new Vector2(-w * 0.5f + r, d * 0.5f - r),
+            };
+            float[] startAngles = { 180f, 270f, 0f, 90f };
+            for (int c = 0; c < 4; c++)
+            {
+                for (int k = 0; k <= cornerSegs; k++)
+                {
+                    float a = (startAngles[c] + 90f * k / cornerSegs) * Mathf.Deg2Rad;
+                    ring.Add(new Vector3(centres[c].x + Mathf.Cos(a) * r, 0f, centres[c].y + Mathf.Sin(a) * r));
+                }
+            }
+
+            // start the seam in the middle of the left side so u=0 sits at the front-left edge
+            int n = ring.Count;
+            var perim = new float[n + 1];
+            for (int i = 1; i <= n; i++) perim[i] = perim[i - 1] + Vector3.Distance(ring[i - 1], ring[i % n]);
+            float total = perim[n];
+            // u origin at the start of the front face (first corner's end point)
+            float uOrigin = perim[cornerSegs / 2];
+
+            var verts = new List<Vector3>();
+            var normals = new List<Vector3>();
+            var uvs = new List<Vector2>();
+            var tris = new List<int>();
+            for (int i = 0; i <= n; i++)
+            {
+                Vector3 p = ring[i % n];
+                Vector3 prev = ring[(i - 1 + n) % n], next = ring[(i + 1) % n];
+                Vector3 tangent = (next - prev).normalized;
+                Vector3 normal = Vector3.Cross(Vector3.up, tangent).normalized;
+                float u = Mathf.Repeat((perim[i] - uOrigin) / total, 1f);
+                if (i == n) u = Mathf.Repeat((total - uOrigin) / total, 1f);
+                verts.Add(p + Vector3.down * h * 0.5f); normals.Add(normal); uvs.Add(new Vector2(u, v0));
+                verts.Add(p + Vector3.up * h * 0.5f); normals.Add(normal); uvs.Add(new Vector2(u, v1));
+            }
+
+            // fix the wrap: duplicate column where u jumps from ~1 back to 0
+            for (int i = 0; i < n; i++)
+            {
+                int a = i * 2, b = (i + 1) * 2;
+                float ua = uvs[a].x, ub = uvs[b].x;
+                if (ub < ua - 0.5f)
+                {
+                    int extra = verts.Count;
+                    verts.Add(verts[b]); normals.Add(normals[b]); uvs.Add(new Vector2(1f, v0));
+                    verts.Add(verts[b + 1]); normals.Add(normals[b + 1]); uvs.Add(new Vector2(1f, v1));
+                    b = extra;
+                }
+
+                tris.AddRange(new[] { a, a + 1, b, b, a + 1, b + 1 });
+            }
+
+            foreach (float sign in new[] { 1f, -1f })
+            {
+                int centre = verts.Count;
+                verts.Add(Vector3.up * sign * h * 0.5f); normals.Add(Vector3.up * sign); uvs.Add(new Vector2(capU, sign > 0 ? v1 - 0.002f : v0 + 0.002f));
+                for (int i = 0; i < n; i++)
+                {
+                    verts.Add(ring[i] + Vector3.up * sign * h * 0.5f); normals.Add(Vector3.up * sign); uvs.Add(new Vector2(capU, sign > 0 ? v1 - 0.002f : v0 + 0.002f));
+                }
+
+                for (int i = 0; i < n; i++)
+                {
+                    int a = centre + 1 + i, b = centre + 1 + (i + 1) % n;
+                    if (sign > 0) tris.AddRange(new[] { centre, b, a });
+                    else tris.AddRange(new[] { centre, a, b });
+                }
+            }
+
+            var mesh = new Mesh { name = name };
+            mesh.SetVertices(verts);
+            mesh.SetNormals(normals);
+            mesh.SetUVs(0, uvs);
+            mesh.SetTriangles(tris, 0);
+            // the ring winds clockwise seen from above; flip if the sides came out inside-out
+            if (Vector3.Dot(mesh.normals[0], verts[0] - Vector3.down * h * 0.5f) < 0f) { }
+            mesh.RecalculateBounds();
+            mesh.RecalculateTangents();
+            return KeepPocketMesh(mesh);
+        }
+
+        /// <summary>A surface of revolution around +Y from a (radius, height) profile, used for the flame and spark wheel.</summary>
+        private static Mesh LatheMesh(string name, Vector2[] profile, int segs)
+        {
+            var verts = new List<Vector3>();
+            var tris = new List<int>();
+            for (int i = 0; i < profile.Length; i++)
+            {
+                for (int s = 0; s <= segs; s++)
+                {
+                    float a = 2f * Mathf.PI * s / segs;
+                    verts.Add(new Vector3(Mathf.Cos(a) * profile[i].x, profile[i].y, Mathf.Sin(a) * profile[i].x));
+                }
+            }
+
+            int row = segs + 1;
+            for (int i = 0; i < profile.Length - 1; i++)
+            {
+                for (int s = 0; s < segs; s++)
+                {
+                    int a = i * row + s, b = a + 1, c = a + row, e = c + 1;
+                    tris.AddRange(new[] { a, c, b, b, c, e });
+                }
+            }
+
+            var mesh = new Mesh { name = name };
+            mesh.SetVertices(verts);
+            mesh.SetTriangles(tris, 0);
+            mesh.RecalculateNormals();
+            mesh.RecalculateBounds();
+            return KeepPocketMesh(mesh);
+        }
+
+        // 5x7 bitmap glyphs for the made-up brand name on the pack
+        private static readonly Dictionary<char, string[]> PackGlyphs = new Dictionary<char, string[]>
+        {
+            ['F'] = new[] { "11111", "10000", "10000", "11110", "10000", "10000", "10000" },
+            ['J'] = new[] { "00111", "00010", "00010", "00010", "00010", "10010", "01100" },
+            ['O'] = new[] { "01110", "10001", "10001", "10001", "10001", "10001", "01110" },
+            ['R'] = new[] { "11110", "10001", "10001", "11110", "10100", "10010", "10001" },
+            ['D'] = new[] { "11100", "10010", "10001", "10001", "10001", "10010", "11100" },
+        };
+
+        /// <summary>
+        /// Paints the wrap-around label for the made-up "FJORD" brand: white card, red flip-top lid with a white
+        /// chevron, a gold tear strip, the name on the front and a black health-warning panel on the back.
+        /// Layout in u: front [0, fw), right side, back, left side — proportional to the pack's perimeter.
+        /// </summary>
+        private static Texture2D PaintCigPackLabel(float w, float d, float lidFrom)
+        {
+            const int W = 1024, H = 512;
+            var px = new Color32[W * H];
+            Color32 white = Color.Lerp(Palette.SeaFoam, Color.white, 0.6f);
+            Color32 red = Palette.BoathouseRust * 1.05f;
+            Color32 darkRed = Palette.BoathouseRust * 0.55f;
+            Color32 gold = Color.Lerp(Palette.LanternAmber, Palette.SunbreakKey, 0.3f);
+            Color32 black = Color.Lerp(Palette.DeepFjordSlate, Color.black, 0.7f);
+            float perim = 2f * (w + d);
+            int fx0 = 0, fx1 = Mathf.RoundToInt(W * w / perim);
+            int sx1 = fx1 + Mathf.RoundToInt(W * d / perim);
+            int bx1 = sx1 + Mathf.RoundToInt(W * w / perim);
+            int lidY = Mathf.RoundToInt(H * lidFrom);
+
+            void Rect(int x0, int y0, int x1, int y1, Color32 c)
+            {
+                for (int y = Mathf.Max(0, y0); y < Mathf.Min(H, y1); y++)
+                    for (int x = Mathf.Max(0, x0); x < Mathf.Min(W, x1); x++)
+                        px[y * W + x] = c;
+            }
+
+            Rect(0, 0, W, H, white);
+            Rect(0, lidY, W, H, red);                         // flip-top lid all the way round
+            Rect(0, lidY - 6, W, lidY - 1, gold);             // gold tear strip just under the lid line
+
+            // white chevron down into the lid on front and back
+            foreach (int x0 in new[] { fx0, sx1 })
+            {
+                int fw = fx1 - fx0;
+                for (int y = lidY; y < H; y++)
+                {
+                    float t = (y - lidY) / (float)(H - lidY);
+                    int half = Mathf.RoundToInt(fw * 0.5f * (1f - t * 1.6f));
+                    if (half <= 0) continue;
+                    int cx = x0 + fw / 2;
+                    for (int x = cx - half; x < cx + half; x++)
+                        if (Mathf.Abs(x - cx) > half - 14) px[y * W + x] = white;
+                }
+            }
+
+            // brand name, pixel font, centred on the front below the lid
+            const string brand = "FJORD";
+            int scale = 9, gap = 2;
+            int textW = brand.Length * (5 + gap) * scale - gap * scale;
+            int tx = fx0 + (fx1 - fx0 - textW) / 2, ty = lidY - 40 - 7 * scale;
+            for (int ci = 0; ci < brand.Length; ci++)
+            {
+                string[] g = PackGlyphs[brand[ci]];
+                for (int gy = 0; gy < 7; gy++)
+                    for (int gx = 0; gx < 5; gx++)
+                        if (g[gy][gx] == '1')
+                            Rect(tx + (ci * (5 + gap) + gx) * scale, ty + (6 - gy) * scale, tx + (ci * (5 + gap) + gx + 1) * scale, ty + (7 - gy) * scale, darkRed);
+            }
+
+            Rect(fx0 + 30, ty - 26, fx1 - 30, ty - 20, gold);   // thin gold rule under the name
+
+            // back: black warning panel with white "text" lines
+            int wy0 = 24, wy1 = Mathf.RoundToInt(lidY * 0.62f);
+            Rect(sx1 + 14, wy0, bx1 - 14, wy1, black);
+            for (int ly = wy1 - 34; ly > wy0 + 14; ly -= 26)
+            {
+                int len = (ly / 26) % 3 == 0 ? 120 : 30;
+                Rect(sx1 + 34, ly - 10, bx1 - 34 - len, ly, white);
+            }
+
+            // right side: small barcode
+            var rng = new System.Random(77);
+            int bx = fx1 + 18;
+            while (bx < sx1 - 18)
+            {
+                int bw = 1 + rng.Next(4);
+                if (rng.Next(2) == 0) Rect(bx, 40, bx + bw, 120, black);
+                bx += bw + 1 + rng.Next(2);
+            }
+
+            return SaveBeachTexture(CigPackLabelPath, px, W, H, srgb: true);
+        }
+
+        private static PickupItem BuildCigarettePack()
+        {
+            AssetDatabase.DeleteAsset(PocketMeshPath);
+            const float w = 0.055f, h = 0.088f, d = 0.022f, r = 0.0025f;
+            const float lidH = h * 0.30f, bodyH = h - lidH;
+            float lidFrom = bodyH / h;
+            Texture2D label = PaintCigPackLabel(w, d, lidFrom);
+            Material card = PropMaterial("Mat_CigPack", Color.white, 0.42f, 0f, label);
+
+            var root = new GameObject("CigarettePack");
+            Mesh body = RoundedPrism("CigPack_Body", w, bodyH, d, r, 3, 0f, lidFrom - 0.004f, 0.125f);
+            PocketPart("Body", root.transform, body, card, new Vector3(0f, -h * 0.5f + bodyH * 0.5f, 0f));
+
+            // the flip-top lid hangs off a hinge on the back edge, so it can be opened later
+            var hinge = new GameObject("LidHinge").transform;
+            hinge.SetParent(root.transform, false);
+            hinge.localPosition = new Vector3(0f, -h * 0.5f + bodyH, d * 0.5f);
+            Mesh lid = RoundedPrism("CigPack_Lid", w * 1.012f, lidH, d * 1.03f, r, 3, lidFrom + 0.004f, 1f, 0.125f);
+            PocketPart("Lid", hinge, lid, card, new Vector3(0f, lidH * 0.5f, -d * 0.5f));
+
+            root.AddComponent<BoxCollider>().size = new Vector3(w, h, d);
+            var item = root.AddComponent<PickupItem>();
+            item.Configure("Cigarettes", 0.020f, h * 0.5f, true, "Use", false);
+            item.SetHeldPose(new Vector3(0.016f, 0f, 0.002f), new Vector3(0f, 180f, 0f));
+
+            Cigarette cigTemplate = BuildCigaretteTemplate(root.transform);
+            root.AddComponent<CigarettePack>().Configure(hinge, cigTemplate);
+            return item;
+        }
+
+        private static Cigarette BuildCigaretteTemplate(Transform parent)
+        {
+            const float radius = 0.0039f;
+            const float filterLen = 0.022f;
+            const float paperLen = 0.056f;
+            const float tipLen = 0.004f;
+            const float totalLen = filterLen + paperLen + tipLen;
+
+            Material filterMat = PropMaterial("Mat_Cig_Filter", Color.Lerp(Palette.LanternAmber, Palette.DriftwoodTimber, 0.45f), 0.25f);
+            Material paperMat = PropMaterial("Mat_Cig_Paper", Color.Lerp(Palette.UiTextParchment, Palette.SeaFoam, 0.25f), 0.18f);
+            Material tipMat = PropMaterial("Mat_Cig_Tobacco", Palette.WetBasalt * 0.45f, 0.1f);
+            Material emberMat = FlameMaterial("Mat_Cig_Ember", Color.Lerp(Palette.LanternAmber, Color.red, 0.35f), 1.4f);
+
+            var cigRoot = new GameObject("CigaretteTemplate");
+            cigRoot.transform.SetParent(parent, false);
+            Quaternion toForward = Quaternion.Euler(90f, 0f, 0f);
+
+            Mesh filterMesh = LatheMesh("Cig_Filter", new[]
+            {
+                new Vector2(0f, 0f), new Vector2(radius, 0f),
+                new Vector2(radius, filterLen), new Vector2(0f, filterLen)
+            }, 12);
+            Mesh paperMesh = LatheMesh("Cig_Paper", new[]
+            {
+                new Vector2(0f, 0f), new Vector2(radius * 0.99f, 0f),
+                new Vector2(radius * 0.99f, paperLen), new Vector2(0f, paperLen)
+            }, 12);
+            Mesh tipMesh = LatheMesh("Cig_Tip", new[]
+            {
+                new Vector2(0f, 0f), new Vector2(radius * 0.96f, 0f),
+                new Vector2(radius * 0.92f, tipLen), new Vector2(0f, tipLen)
+            }, 12);
+            Mesh emberMesh = LatheMesh("Cig_Ember", new[]
+            {
+                new Vector2(0f, 0f), new Vector2(radius * 0.94f, 0f),
+                new Vector2(radius * 0.85f, 0.003f), new Vector2(0f, 0.0045f)
+            }, 12);
+
+            PocketPart("Filter", cigRoot.transform, filterMesh, filterMat, Vector3.zero, null, toForward);
+            PocketPart("Paper", cigRoot.transform, paperMesh, paperMat, new Vector3(0f, 0f, filterLen), null, toForward);
+            PocketPart("Tobacco", cigRoot.transform, tipMesh, tipMat, new Vector3(0f, 0f, filterLen + paperLen), null, toForward);
+
+            var emberGo = PocketPart("Ember", cigRoot.transform, emberMesh, emberMat, new Vector3(0f, 0f, totalLen - 0.001f), null, toForward);
+            emberGo.GetComponent<MeshRenderer>().shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+
+            var tip = new GameObject("Tip").transform;
+            tip.SetParent(cigRoot.transform, false);
+            tip.localPosition = new Vector3(0f, 0f, totalLen);
+
+            var glow = emberGo.AddComponent<Light>();
+            glow.type = LightType.Point;
+            glow.color = Color.Lerp(Palette.LanternAmber, Color.red, 0.35f);
+            glow.range = 0.5f;
+            glow.intensity = 0.12f;
+            glow.shadows = LightShadows.None;
+
+            var cig = cigRoot.AddComponent<Cigarette>();
+            cig.Configure(emberGo, glow, tip);
+            cigRoot.SetActive(false);
+            return cig;
+        }
+
+        private static PickupItem BuildLighter()
+        {
+            const float w = 0.024f, d = 0.0125f, bodyH = 0.064f, hoodH = 0.013f;
+            float h = bodyH + hoodH;
+            Color plastic = Color.Lerp(Palette.DeepFjordSlate, new Color(0.1f, 0.35f, 0.75f), 0.55f);
+            Material shell = PropMaterial("Mat_Lighter", plastic, 0.86f);
+            Material steel = PropMaterial("Mat_Lighter_Metal", Palette.HarbourConcrete, 0.78f, 1f);
+            Material darkSteel = PropMaterial("Mat_Lighter_Wheel", Palette.WetBasalt * 0.6f, 0.55f, 1f);
+            Material button = PropMaterial("Mat_Lighter_Button", Palette.BoathouseRust, 0.5f);
+            Material slot = PropMaterial("Mat_Lighter_Slot", Color.Lerp(Palette.DeepFjordSlate, Color.black, 0.8f), 0.2f);
+
+            var root = new GameObject("Lighter");
+            float baseY = -h * 0.5f;
+
+            // plastic fuel body: soft oval sides like a disposable lighter
+            PocketPart("Body", root.transform, RoundedPrism("Lighter_Body", w, bodyH, d, d * 0.48f, 6), shell, new Vector3(0f, baseY + bodyH * 0.5f, 0f));
+            // a darker base band where the fuel tank is sealed
+            PocketPart("Base", root.transform, RoundedPrism("Lighter_Base", w * 1.01f, 0.003f, d * 1.02f, d * 0.48f, 6), slot, new Vector3(0f, baseY + 0.0015f, 0f));
+
+            // stamped steel hood with a dark wind slot at the front
+            float hoodY = baseY + bodyH + hoodH * 0.5f;
+            PocketPart("Hood", root.transform, RoundedPrism("Lighter_Hood", w * 0.9f, hoodH, d * 0.95f, d * 0.3f, 4), steel, new Vector3(-w * 0.04f, hoodY, 0f));
+            PocketPart("HoodSlot", root.transform, RoundedPrism("Lighter_HoodSlot", w * 0.42f, hoodH * 0.55f, 0.0012f, 0.0004f, 2), slot, new Vector3(-w * 0.04f, hoodY + hoodH * 0.1f, -d * 0.48f));
+
+            // spark wheel across the top at the back-right, and the red gas button beside it
+            Mesh wheel = LatheMesh("Lighter_Wheel", new[]
+            {
+                new Vector2(0f, -0.004f), new Vector2(0.0042f, -0.004f), new Vector2(0.0046f, -0.002f),
+                new Vector2(0.0046f, 0.002f), new Vector2(0.0042f, 0.004f), new Vector2(0f, 0.004f),
+            }, 18);
+            PocketPart("SparkWheel", root.transform, wheel, darkSteel, new Vector3(w * 0.28f, baseY + bodyH + 0.0045f, 0f), null, Quaternion.Euler(90f, 0f, 0f));
+            PocketPart("Button", root.transform, RoundedPrism("Lighter_Button", w * 0.3f, 0.005f, d * 0.75f, 0.0015f, 3), button, new Vector3(w * 0.3f, baseY + bodyH + 0.001f, 0f), null, Quaternion.Euler(0f, 0f, 8f));
+
+            // two-layer flame: a tall amber outer flame and a small blue core at the nozzle
+            var flame = new GameObject("Flame");
+            flame.transform.SetParent(root.transform, false);
+            flame.transform.localPosition = new Vector3(-w * 0.04f, baseY + h + 0.001f, 0f);
+            Mesh outer = LatheMesh("Lighter_FlameOuter", new[]
+            {
+                new Vector2(0.0010f, 0f), new Vector2(0.0040f, 0.004f), new Vector2(0.0050f, 0.010f),
+                new Vector2(0.0042f, 0.018f), new Vector2(0.0024f, 0.026f), new Vector2(0.0006f, 0.032f), new Vector2(0f, 0.034f),
+            }, 16);
+            Mesh inner = LatheMesh("Lighter_FlameInner", new[]
+            {
+                new Vector2(0.0008f, 0f), new Vector2(0.0024f, 0.002f), new Vector2(0.0026f, 0.005f),
+                new Vector2(0.0016f, 0.009f), new Vector2(0f, 0.012f),
+            }, 12);
+            var outerGo = PocketPart("FlameOuter", flame.transform, outer, FlameMaterial("Mat_LighterFlame", Color.Lerp(Palette.LanternAmber, Palette.SunbreakKey, 0.2f), 0.9f), Vector3.zero);
+            var innerGo = PocketPart("FlameCore", flame.transform, inner, FlameMaterial("Mat_LighterFlameCore", Color.Lerp(Palette.SkyZenithMist, new Color(0.25f, 0.45f, 1f), 0.7f), 0.8f), Vector3.zero);
+            outerGo.GetComponent<MeshRenderer>().shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            innerGo.GetComponent<MeshRenderer>().shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+
+            var glow = flame.AddComponent<Light>();
+            glow.type = LightType.Point;
+            glow.color = Palette.LanternAmber;
+            glow.range = 2.5f;
+            glow.intensity = 0.35f;
+            glow.shadows = LightShadows.None;
+
+            root.AddComponent<BoxCollider>().size = new Vector3(w, h, d);
+            var item = root.AddComponent<PickupItem>();
+            item.Configure("Lighter", 0.022f, h * 0.5f, true, "Light", false);
+            item.SetHeldPose(new Vector3(0.014f, 0f, -0.004f), new Vector3(0f, 180f, 0f));
+            root.AddComponent<Lighter>().Configure(flame, glow);
+            return item;
+        }
+
+        /// <summary>Close-up of Andrias's pocket items (pack and a lit lighter) for checking their look.</summary>
+        private static void RenderPocketItemsShot(Camera cam, string file)
+        {
+            CharacterPockets pockets = UnityEngine.Object.FindObjectsByType<CharacterPockets>(FindObjectsSortMode.None).FirstOrDefault();
+            if (pockets == null || pockets.Items.Count == 0) return;
+
+            var saved = new List<(PickupItem item, Transform parent, Vector3 pos, Quaternion rot, bool active)>();
+            foreach (PickupItem it in pockets.Items)
+                saved.Add((it, it.transform.parent, it.transform.localPosition, it.transform.localRotation, it.gameObject.activeSelf));
+
+            Vector3 eye = cam.transform.position;
+            Vector3 fwd = cam.transform.forward, right = cam.transform.right, up = cam.transform.up;
+            Quaternion facing = Quaternion.LookRotation(Vector3.ProjectOnPlane(-fwd, Vector3.up).normalized, Vector3.up);
+            var fill = new GameObject("PocketShotFill").AddComponent<Light>();
+            fill.type = LightType.Point;
+            fill.range = 2f;
+            fill.intensity = 0.18f;
+            fill.color = Palette.SunbreakKey;
+            fill.transform.position = eye + up * 0.15f - right * 0.2f;
+            float keepFov = cam.fieldOfView;
+            try
+            {
+                for (int i = 0; i < saved.Count; i++)
+                {
+                    Transform t = saved[i].item.transform;
+                    t.SetParent(null, true);
+                    t.gameObject.SetActive(true);
+                    t.position = eye + fwd * 0.32f + right * (i == 0 ? -0.04f : 0.035f);
+                    // pack: front and a bit of side; lighter: three-quarter so the hood and wheel read
+                    t.rotation = facing * Quaternion.Euler(0f, i == 0 ? 180f + 28f : 180f - 20f, 0f);
+                    if (t.TryGetComponent(out Lighter lighter))
+                    {
+                        Transform flame = t.Find("Flame");
+                        if (flame != null) flame.gameObject.SetActive(true);
+                        Light l = flame != null ? flame.GetComponent<Light>() : null;
+                        if (l != null) l.enabled = true;
+                    }
+                }
+
+                cam.fieldOfView = 26f;
+                Shot(cam, null);
+                Shot(cam, file);
+            }
+            finally
+            {
+                cam.fieldOfView = keepFov;
+                UnityEngine.Object.DestroyImmediate(fill.gameObject);
+                foreach (var sv in saved)
+                {
+                    Transform t = sv.item.transform;
+                    if (t.TryGetComponent(out Lighter lighter))
+                    {
+                        Transform flame = t.Find("Flame");
+                        if (flame != null) flame.gameObject.SetActive(false);
+                        Light l = flame != null ? flame.GetComponent<Light>() : null;
+                        if (l != null) l.enabled = false;
+                    }
+
+                    t.SetParent(sv.parent, false);
+                    t.localPosition = sv.pos;
+                    t.localRotation = sv.rot;
+                    t.gameObject.SetActive(sv.active);
+                }
+            }
+        }
+
+        private const string DriftwoodMatPath = VillageAssetDir + "/Mat_Driftwood.mat";
+
+        /// <summary>
+        /// Washed-up driftwood logs and old planks on the dry sand. Each is a <see cref="PickupItem"/> with a
+        /// <see cref="Firewood"/> marker, so the players can gather them for a fire later.
+        /// </summary>
+        private static void BuildBeachWood(float sea, Vector3 avoid)
+        {
+            GameObject existing = GameObject.Find("BeachWood");
+            if (existing != null) UnityEngine.Object.DestroyImmediate(existing);
+
+            var rng = new System.Random(3301);
+            float R() => (float)rng.NextDouble();
+            Mesh cube = Resources.GetBuiltinResource<Mesh>("Cube.fbx");
+            Mesh cylinder = Resources.GetBuiltinResource<Mesh>("Cylinder.fbx");
+            Material log = RockMaterial(DriftwoodMatPath, "Mat_Driftwood", Palette.DriftwoodTimber * 0.85f, 0.1f);
+            Material plank = RockMaterial(DriftwoodMatPath.Replace("Driftwood", "OldPlank"), "Mat_OldPlank", Palette.DriftwoodTimber * 0.65f, 0.08f);
+
+            var root = new GameObject("BeachWood");
+            int placed = 0;
+            const int count = 10;
+            for (int attempt = 0; attempt < 400 && placed < count; attempt++)
+            {
+                float z = Mathf.Lerp(316f, 392f, R());
+                GetBeachEnvelope(z, out float xTop, out float xShore);
+                float x = Mathf.Lerp(xTop + 2f, xShore - 3f, R());
+                if (new Vector2(x - avoid.x, z - avoid.z).sqrMagnitude < 9f) continue;   // leave the sea mine clear
+                if (!Physics.Raycast(new Vector3(x, 60f, z), Vector3.down, out RaycastHit hit, 200f, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore)
+                    || hit.collider.name != "VillageBeach" || hit.point.y < sea + 0.3f)
+                {
+                    continue;   // dry sand only, never on top of a stone or another piece
+                }
+
+                bool isPlank = placed % 2 == 1;
+                float yaw = R() * 360f;
+                GameObject go;
+                float halfHeight;
+                if (isPlank)
+                {
+                    go = new GameObject($"Plank_{placed / 2 + 1:00}");
+                    var scale = new Vector3(Mathf.Lerp(0.14f, 0.2f, R()), 0.03f, Mathf.Lerp(0.8f, 1.3f, R()));
+                    go.transform.localScale = scale;
+                    go.transform.rotation = Quaternion.Euler(0f, yaw, (R() - 0.5f) * 6f);
+                    go.AddComponent<MeshFilter>().sharedMesh = cube;
+                    go.AddComponent<MeshRenderer>().sharedMaterial = plank;
+                    go.AddComponent<BoxCollider>();
+                    halfHeight = scale.y * 0.5f;
+                }
+                else
+                {
+                    go = new GameObject($"Driftwood_{placed / 2 + 1:00}");
+                    float d = Mathf.Lerp(0.07f, 0.13f, R());
+                    float len = Mathf.Lerp(0.6f, 1.1f, R());
+                    go.transform.localScale = new Vector3(d, len * 0.5f, d);   // the primitive cylinder is 2 m tall
+                    go.transform.rotation = Quaternion.Euler(90f, yaw, 0f);    // lying on its side
+                    go.AddComponent<MeshFilter>().sharedMesh = cylinder;
+                    go.AddComponent<MeshRenderer>().sharedMaterial = log;
+                    go.AddComponent<CapsuleCollider>();
+                    halfHeight = d * 0.5f;
+                }
+
+                go.transform.SetParent(root.transform, true);
+                go.transform.position = hit.point + Vector3.up * halfHeight;
+                var woodItem = go.AddComponent<PickupItem>();
+                woodItem.Configure(isPlank ? "Plank" : "Driftwood", 0f, halfHeight, false, "Use", false);
+                woodItem.SetTwoHanded(true);   // carried crosswise in both hands, not dangling from one fist
+                go.AddComponent<Firewood>().Configure(isPlank ? 45f : 90f);
+                placed++;
+            }
+
+            Debug.Log($"[VillageSceneSetup] Beach wood: {placed} pickable pieces.");
+        }
+
         private sealed class CombineList
         {
             private readonly List<CombineInstance> items = new List<CombineInstance>();
@@ -1814,6 +2634,9 @@ namespace Arnafjordur.Editor
                 {
                     beerItem = GetOrAdd<PickupItem>(beerTf.gameObject);
                     beerItem.Configure("Beer", gripBelow, 0.075f, true, "Drink", true);
+                    var bottle = GetOrAdd<BeerBottle>(beerTf.gameObject);
+                    bottle.SetStartSipsLeft(2);   // 3 of 5 sips drunk in the car
+                    EditorUtility.SetDirty(bottle);
                     EditorUtility.SetDirty(beerItem);
                 }
 
@@ -1821,6 +2644,7 @@ namespace Arnafjordur.Editor
                 itemHolder.Configure(handBone, gripLocal, beerItem);
                 itemHolder.PoseHeldItem();
                 EditorUtility.SetDirty(itemHolder);
+                BuildPocketItems(name, charTransform);
 
                 var controller = GetOrAdd<CharacterController>(charTransform.gameObject);
                 controller.height = 1.74f;
@@ -1836,6 +2660,7 @@ namespace Arnafjordur.Editor
                 motor.Area = walkableArea;
 
                 var drunk = GetOrAdd<CharacterDrunk>(charTransform.gameObject);
+                drunk.SetStartingBeers(0.6f);   // three sips taken during the drive
 
                 EditorUtility.SetDirty(animator);
                 EditorUtility.SetDirty(controller);
@@ -2149,6 +2974,7 @@ namespace Arnafjordur.Editor
 
                 cam.transform.SetPositionAndRotation(keepPos, keepRot);
                 cam.fieldOfView = keepFov;
+                RenderPocketItemsShot(cam, Path.Combine(previewDir, "village_pocket_items.png"));
             }
             catch (Exception e)
             {
@@ -2252,6 +3078,7 @@ namespace Arnafjordur.Editor
             CharacterItemHolder itemHolder = player.GetComponent<CharacterItemHolder>();
             AssertDrunkCondition(drunk != null, "Player missing CharacterDrunk component.");
             AssertDrunkCondition(cam != null, "Missing Camera for drunk verification renders.");
+            drunk.SetBeersDrunk(0f);   // players start at 0.6 beers; test the progression from sober
 
             AssertDrunkCondition(
                 drunk.Stage == CharacterDrunk.DrunkStage.Sober && Mathf.Approximately(drunk.BeersDrunk, 0f),
@@ -2786,12 +3613,12 @@ namespace Arnafjordur.Editor
             BoxPart(PrimitiveType.Cylinder, "TimerPlate", panelRoot.transform, new Vector3(0.145f, 0.065f, 0.029f), new Vector3(0.15f, 0.012f, 0.082f), rustMat);
             FindChildByName(panelRoot.transform, "TimerPlate").localRotation = Quaternion.Euler(90f, 0f, 0f);
 
-            // Module 2: 8 contact toggle switches.
+            // Module 2: 10 contact toggle switches.
             BoxPart(PrimitiveType.Cube, "SwitchBusBar", panelRoot.transform, new Vector3(0f, -0.028f, 0.027f), new Vector3(0.49f, 0.082f, 0.016f), ironMat);
-            var switchLevers = new Transform[8];
-            for (int s = 0; s < 8; s++)
+            var switchLevers = new Transform[SeaMineBomb.ContactCount];
+            for (int s = 0; s < SeaMineBomb.ContactCount; s++)
             {
-                float sx = -0.203f + s * 0.058f;
+                float sx = -0.207f + s * 0.046f;
                 BoxPart(PrimitiveType.Cylinder, $"SwitchBase_{s}", panelRoot.transform, new Vector3(sx, -0.028f, 0.036f), new Vector3(0.032f, 0.010f, 0.032f), brassMat);
                 FindChildByName(panelRoot.transform, $"SwitchBase_{s}").localRotation = Quaternion.Euler(90f, 0f, 0f);
 
@@ -2977,7 +3804,7 @@ namespace Arnafjordur.Editor
                 cam.fieldOfView = 50f;
                 Shot(cam, Path.Combine(previewDir, "village_bomb_bending.png"));
 
-                // Verify Module 1 (TØNT), word penalty flash, Module 2 (8 contacts), -60s wrong attempt penalty, and deactivation.
+                // Verify Module 1 (TØNT), word penalty flash, Module 2 (10 contacts = 946), -60s wrong attempt penalty, and deactivation.
                 AssertCondition("Sea mine bomb", !bomb.TrySubmitWord("TONT")
                     && Mathf.Approximately(bomb.RemainingSeconds, 3540f)
                     && bomb.WordPenaltyFlashTimer > 0f,
@@ -2996,10 +3823,31 @@ namespace Arnafjordur.Editor
                     bomb.SetContact(i, SeaMineBomb.DefaultTargetContacts[i]);
                 }
 
-                AssertCondition("Sea mine bomb", bomb.TrySubmitContacts() && bomb.IsContactsSolved && bomb.CanDeactivate,
-                    "Expected target contacts to solve Module 2 and unlock bomb deactivation.");
-                AssertCondition("Sea mine bomb", bomb.TryDeactivate() && bomb.IsDisarmed,
-                    "Expected TryDeactivate() to disarm the bomb once active modules are solved.");
+                AssertCondition("Sea mine bomb", bomb.TrySubmitContacts() && bomb.IsContactsSolved && !bomb.CanDeactivate,
+                    "Expected target contacts to solve Module 2 while Module 3 (wires) still blocks deactivation.");
+
+                // Module 3: no cutters = no cut; with cutters the right wire solves it, a wrong one detonates.
+                PickupItem cutterStandIn = olavurHolder != null ? olavurHolder.HeldItem : null;
+                AssertCondition("Sea mine bomb", cutterStandIn != null, "Expected the inspecting character to hold an item to stand in for wire cutters.");
+                int wrongWire = (bomb.CorrectWireIndex + 1) % SeaMineBomb.WireCount;
+                AssertCondition("Sea mine bomb", !bomb.TryCutWire(bomb.CorrectWireIndex) && !bomb.IsWireCut(bomb.CorrectWireIndex),
+                    "Expected cutting a wire without wire cutters to do nothing.");
+                var tempCutters = cutterStandIn.gameObject.AddComponent<WireCutters>();
+                try
+                {
+                    AssertCondition("Sea mine bomb", bomb.TryCutWire(bomb.CorrectWireIndex) && bomb.IsWiresSolved && bomb.CanDeactivate && !bomb.IsExploded,
+                        "Expected the correct wire to solve Module 3 and unlock deactivation.");
+                    AssertCondition("Sea mine bomb", bomb.TryDeactivate() && bomb.IsDisarmed,
+                        "Expected TryDeactivate() to disarm the bomb once active modules are solved.");
+
+                    bomb.ResetBomb();
+                    AssertCondition("Sea mine bomb", bomb.TryCutWire(wrongWire) && bomb.IsExploded && !bomb.IsWiresSolved,
+                        "Expected a wrong wire to detonate the mine (game lost).");
+                }
+                finally
+                {
+                    UnityEngine.Object.DestroyImmediate(tempCutters);
+                }
             }
             finally
             {
@@ -3025,7 +3873,7 @@ namespace Arnafjordur.Editor
                 cameraRig.SetOrbit(16f, 18f, 5.6f, snap: true);
             }
 
-            Debug.Log("[VillageSceneSetup] Sea mine bomb verification: OK (3600s timer, -60s penalty, TØNT + 8 contacts, FP & third-person bending pose)");
+            Debug.Log("[VillageSceneSetup] Sea mine bomb verification: OK (3600s timer, -60s penalty, TØNT + 10 contacts (946) + wires (right cut / wrong detonates), FP & third-person bending pose)");
         }
 
         private static void AssertCondition(string area, bool condition, string message)
@@ -3091,7 +3939,15 @@ namespace Arnafjordur.Editor
                 var tex = new Texture2D(rt.width, rt.height, TextureFormat.RGB24, false);
                 tex.ReadPixels(new Rect(0, 0, rt.width, rt.height), 0, 0);
                 tex.Apply();
-                File.WriteAllBytes(file, tex.EncodeToPNG());
+                try
+                {
+                    if (File.Exists(file)) File.Delete(file);
+                    File.WriteAllBytes(file, tex.EncodeToPNG());
+                }
+                catch (IOException ex)
+                {
+                    Debug.LogWarning($"[VillageSceneSetup] Could not overwrite preview {file}: {ex.Message}");
+                }
                 RenderTexture.active = null;
                 UnityEngine.Object.DestroyImmediate(tex);
             }

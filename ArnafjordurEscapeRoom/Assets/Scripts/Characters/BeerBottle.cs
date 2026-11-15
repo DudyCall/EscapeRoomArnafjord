@@ -12,13 +12,19 @@ namespace Arnafjordur.Characters
         [SerializeField, Min(0f), Tooltip("Seconds a thrown-away bottle lies on the ground before it is cleared.")]
         private float litterSeconds = 30f;
 
+        [SerializeField, Min(-1), Tooltip("Sips left when the scene starts; -1 means a full bottle.")]
+        private int startSipsLeft = -1;
+
         private int _left = -1;
         private bool _thrown;
         private Vector3 _from, _to, _spinAxis;
         private float _flightTime, _t;
 
         public int MaxSips => Mathf.Max(1, sips);
-        public int SipsLeft => _left < 0 ? sips : _left;
+        public int SipsLeft => _left < 0 ? (startSipsLeft < 0 ? sips : Mathf.Min(startSipsLeft, sips)) : _left;
+
+        /// <summary>Builder hook: the bottle starts part-drunk (e.g. the players' car beer).</summary>
+        public void SetStartSipsLeft(int left) => startSipsLeft = left;
         public bool IsEmpty => SipsLeft <= 0;
         public bool IsThrown => _thrown;
 
