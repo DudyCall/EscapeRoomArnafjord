@@ -1180,6 +1180,9 @@ def add_box(mb, pts_8, mat, cen):
 # doors knockable and build interiors behind the right walls (world = portal-local Unity coordinates).
 HOUSE_RECORDS = []
 
+# Buildings whose foundation holds a room (Unity's VillageHousesSetup builds it): the black boathouse's boat room.
+OPEN_FOUNDATIONS = {50}
+
 
 def house(cx, cz, yaw, w, d, h, roof_h, wall, roof, windows=True, is_church=False, b_idx=0, kind="house", trim_override=None, plinth_override=None):
     # Ensure corners are grounded cleanly on slopes
@@ -1281,17 +1284,32 @@ def house(cx, cz, yaw, w, d, h, roof_h, wall, roof, windows=True, is_church=Fals
     clear_xn = wall_clearance(b_idx, cx, cz, yaw, w, d, -1.0, 0.0)
 
     # 1. Foundation Plinth (kjallari) + water-table ledge
+    # Houses with rooms below their floor (built in Unity) get only a rim on top, not a lid over the whole footprint.
+    open_top = b_idx in OPEN_FOUNDATIONS
+
+    def rim_top(pad, y):
+        rect = [(-w / 2, -d / 2), (w / 2, -d / 2), (w / 2, d / 2), (-w / 2, d / 2)]
+        outer = [(-w / 2 - pad, -d / 2 - pad), (w / 2 + pad, -d / 2 - pad), (w / 2 + pad, d / 2 + pad), (-w / 2 - pad, d / 2 + pad)]
+        for i in range(4):
+            j = (i + 1) % 4
+            add_quad_uv(village, PL(outer[i][0], y, outer[i][1]), PL(outer[j][0], y, outer[j][1]),
+                        PL(rect[j][0], y, rect[j][1]), PL(rect[i][0], y, rect[i][1]), plinth_mat, lambda q: (0.0, 1.0, 0.0), 0.5)
+
     p_corners = [(-w / 2 - plinth_pad, -d / 2 - plinth_pad), (w / 2 + plinth_pad, -d / 2 - plinth_pad),
                  (w / 2 + plinth_pad, d / 2 + plinth_pad), (-w / 2 - plinth_pad, d / 2 + plinth_pad)]
     add_box_uv(village, [PL(x, b, z) for x, z in p_corners], [PL(x, plinth_h, z) for x, z in p_corners],
-               plinth_mat, uv_scale=0.5, include_top=True)
+               plinth_mat, uv_scale=0.5, include_top=not open_top)
+    if open_top:
+        rim_top(plinth_pad, plinth_h)
     if is_detailed:
         wt_pad = plinth_pad + 0.02
         wt_corners = [(-w / 2 - wt_pad, -d / 2 - wt_pad), (w / 2 + wt_pad, -d / 2 - wt_pad),
                       (w / 2 + wt_pad, d / 2 + wt_pad), (-w / 2 - wt_pad, d / 2 + wt_pad)]
         add_box_uv(village, [PL(x, plinth_h - 0.06, z) for x, z in wt_corners],
                    [PL(x, plinth_h + 0.015, z) for x, z in wt_corners],
-                   plinth_mat, uv_scale=0.5, include_top=True)
+                   plinth_mat, uv_scale=0.5, include_top=not open_top)
+        if open_top:
+            rim_top(wt_pad, plinth_h + 0.015)
 
     # 2. Main Timber Walls (overlapping plinth top slightly so there is no crack)
     wall_y0 = plinth_h - 0.02

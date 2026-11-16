@@ -36,6 +36,7 @@ namespace Arnafjordur.Characters
         [SerializeField] private float firstPersonMaxPitch = 75f;
         [SerializeField] private float thirdPersonFov = 45f;
         [SerializeField] private float firstPersonFov = 65f;
+        private const float AimFov = 38f;
 
         private static readonly RaycastHit[] Hits = new RaycastHit[16];
 
@@ -65,6 +66,18 @@ namespace Arnafjordur.Characters
 
         /// <summary>True when first-person view is currently active.</summary>
         public bool IsFirstPerson => firstPerson;
+
+        /// <summary>The character the camera follows.</summary>
+        public Transform Target => target;
+
+        /// <summary>0..1: how far a raised gun narrows the first-person view (and slows looking around) for aiming.</summary>
+        public float AimZoom { get; set; }
+
+        /// <summary>Kicks the first-person view up by <paramref name="degrees"/> (a gunshot's recoil).</summary>
+        public void AddRecoil(float degrees)
+        {
+            pitch = Mathf.Clamp(pitch - degrees, firstPerson ? firstPersonMinPitch : minPitch, firstPerson ? firstPersonMaxPitch : maxPitch);
+        }
 
         /// <summary>True when locked into a bent-down close-up inspection view (e.g., sea mine bomb).</summary>
         public bool IsInspectingOverride => _hasInspectionOverride && target != null && target == _inspectionTarget;
@@ -362,8 +375,9 @@ namespace Arnafjordur.Characters
                 if (mouse.rightButton.isPressed)
                 {
                     Vector2 delta = mouse.delta.ReadValue();
-                    yaw += delta.x * orbitSensitivity;
-                    pitch = Mathf.Clamp(pitch - delta.y * orbitSensitivity, pMin, pMax);
+                    float sensitivity = orbitSensitivity * (firstPerson ? Mathf.Lerp(1f, 0.55f, AimZoom) : 1f);
+                    yaw += delta.x * sensitivity;
+                    pitch = Mathf.Clamp(pitch - delta.y * sensitivity, pMin, pMax);
                 }
 
                 float scrollY = mouse.scroll.ReadValue().y;
@@ -468,7 +482,7 @@ namespace Arnafjordur.Characters
                 transform.SetPositionAndRotation(eyePos, fpRot);
                 if (_camera != null)
                 {
-                    _camera.fieldOfView = firstPersonFov + drunkFov;
+                    _camera.fieldOfView = Mathf.Lerp(firstPersonFov, AimFov, AimZoom) + drunkFov;
                     _camera.nearClipPlane = 0.05f;
                 }
 

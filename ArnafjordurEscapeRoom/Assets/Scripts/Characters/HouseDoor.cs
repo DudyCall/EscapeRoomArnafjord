@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -6,7 +7,8 @@ namespace Arnafjordur.Characters
     /// <summary>
     /// A house door the party can knock on. Sits at the bottom centre of the door, its forward pointing to the side
     /// people stand on (out of the house for front doors, into the room for <see cref="IsInside"/> doors). A door with
-    /// an <see cref="Interior"/> and an <see cref="OtherSide"/> can be gone through once someone has knocked.
+    /// an <see cref="Interior"/> and an <see cref="OtherSide"/> can be gone through once someone has knocked, unless it
+    /// is locked: then someone has to stand at it holding the right <see cref="HouseKey"/> and use it (U) first.
     /// <see cref="Arnafjordur.UI.HouseDoorUi"/> runs the prompt, input and fade.
     /// </summary>
     public sealed class HouseDoor : MonoBehaviour
@@ -24,9 +26,15 @@ namespace Arnafjordur.Characters
         [SerializeField] private HouseDoor otherSide;
         [SerializeField] private bool isInside;
         [SerializeField, TextArea] private string knockReply = "Nobody answers.";
+        [SerializeField, Tooltip("Empty for a door without a lock; otherwise the HouseKey lock id that opens it.")]
+        private string lockId = "";
+        [SerializeField] private bool locked;
+
+        /// <summary>Things to tell the player about locks and keys (the door UI shows them).</summary>
+        public static event Action<string> Notice;
 
         private AudioSource _audio;
-        private static AudioClip _knockClip;
+        private static AudioClip _knockClip, _unlockClip;
 
         public bool HasKnocked { get; private set; }
         public bool IsInside => isInside;
@@ -36,7 +44,9 @@ namespace Arnafjordur.Characters
         /// <summary>The way people face after arriving at this door: away from it.</summary>
         public float StandYaw => transform.eulerAngles.y;
         public bool CanGoThrough => interior != null && otherSide != null;
-        public string KnockReply => knockReply;
+        public string KnockReply => locked ? $"{knockReply} The door is locked." : knockReply;
+        public bool IsLocked => locked;
+        public string LockId => lockId;
         public float Reach => reach;
 
         /// <summary>Sets the door up (used by the editor scene builder).</summary>
@@ -48,6 +58,64 @@ namespace Arnafjordur.Characters
             interior = leadsInto;
             otherSide = partner;
             isInside = inside;
+        }
+
+        /// <summary>Gives the door a lock (used by the editor scene builder).</summary>
+        public void SetLock(string id, bool isLocked)
+        {
+            lockId = id ?? "";
+            locked = isLocked && lockId.Length > 0;
+        }
+
+        public static void Announce(string text) => Notice?.Invoke(text);
+
+        /// <summary>Turns the lock with a key whose id is <paramref name="keyId"/>; false when it doesn't fit (or nothing is locked).</summary>
+        public bool TryUnlock(string keyId)
+        {
+            if (!locked || keyId != lockId) return false;
+            locked = false;
+            HasKnocked = true;   // straight in from now on
+            if (otherSide != null)
+            {
+                otherSide.locked = false;
+                otherSide.HasKnocked = true;
+            }
+
+            if (Application.isPlaying)
+            {
+                if (_unlockClip == null) _unlockClip = BuildUnlockClip();
+                PlayOneShot(_unlockClip, 1f);
+            }
+
+            Announce("*click* The key turns. The door is open.");
+            return true;
+        }
+
+        /// <summary>The nearest locked door the character stands at, or null.</summary>
+        public static HouseDoor LockedDoorInReach(CharacterMotor character)
+        {
+            HouseDoor best = null;
+            float bestDistance = float.PositiveInfinity;
+            foreach (HouseDoor door in All)
+            {
+                if (door.locked && door.InReach(character, out float d) && d < bestDistance)
+                {
+                    best = door;
+                    bestDistance = d;
+                }
+            }
+
+            return best;
+        }
+
+        public static bool AnyDoorInReach(CharacterMotor character)
+        {
+            foreach (HouseDoor door in All)
+            {
+                if (door.InReach(character, out _)) return true;
+            }
+
+            return false;
         }
 
         private void OnEnable() => All.Add(this);
@@ -73,6 +141,12 @@ namespace Arnafjordur.Characters
         {
             HasKnocked = true;
             if (otherSide != null) otherSide.HasKnocked = true;
+            if (_knockClip == null) _knockClip = BuildKnockClip();
+            PlayOneShot(_knockClip, 0.9f);
+        }
+
+        private void PlayOneShot(AudioClip clip, float volume)
+        {
             if (_audio == null)
             {
                 _audio = gameObject.AddComponent<AudioSource>();
@@ -82,9 +156,38 @@ namespace Arnafjordur.Characters
                 _audio.maxDistance = 25f;
             }
 
-            if (_knockClip == null) _knockClip = BuildKnockClip();
-            _audio.pitch = Random.Range(0.94f, 1.06f);
-            _audio.PlayOneShot(_knockClip, 0.9f);
+            _audio.pitch = UnityEngine.Random.Range(0.94f, 1.06f);
+            _audio.PlayOneShot(clip, volume);
+        }
+
+        /// <summary>An old lock turning: a scrape, then two sharp metallic clicks as the bolt goes back.</summary>
+        private static AudioClip BuildUnlockClip()
+        {
+            int length = Mathf.CeilToInt(SampleRate * 0.55f);
+            var data = new float[length];
+            var rng = new System.Random(11);
+            for (int i = 0; i < SampleRate * 0.22f; i++)
+            {
+                float t = i / (float)SampleRate;
+                float env = Mathf.Sin(Mathf.PI * t / 0.22f);
+                data[i] += ((float)rng.NextDouble() * 2f - 1f) * 0.12f * env * (0.6f + 0.4f * Mathf.Sin(2f * Mathf.PI * 31f * t));
+            }
+
+            foreach ((float start, float pitch) in new[] { (0.24f, 2350f), (0.33f, 1650f) })
+            {
+                int s0 = Mathf.RoundToInt(start * SampleRate);
+                for (int i = 0; i < SampleRate * 0.12f && s0 + i < length; i++)
+                {
+                    float t = i / (float)SampleRate;
+                    float ring = Mathf.Sin(2f * Mathf.PI * pitch * t) * Mathf.Exp(-t * 60f) + 0.5f * Mathf.Sin(2f * Mathf.PI * pitch * 1.47f * t) * Mathf.Exp(-t * 90f);
+                    float tick = ((float)rng.NextDouble() * 2f - 1f) * Mathf.Exp(-t * 400f);
+                    data[s0 + i] += (ring * 0.45f + tick * 0.6f);
+                }
+            }
+
+            AudioClip clip = AudioClip.Create("DoorUnlock", length, 1, SampleRate, false);
+            clip.SetData(data, 0);
+            return clip;
         }
 
         /// <summary>

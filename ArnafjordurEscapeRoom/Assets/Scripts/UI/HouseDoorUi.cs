@@ -12,7 +12,8 @@ namespace Arnafjordur.UI
     /// <summary>
     /// Knocking on village doors and going in and out of houses that have rooms (<see cref="HouseInterior"/>).
     /// Shows a tappable prompt when the active character stands at a <see cref="HouseDoor"/>, takes E or a click on
-    /// the door, shows what happens after a knock, and fades to black while the party is moved through a door.
+    /// the door, shows what happens after a knock, and fades to black while the party is moved through a door. A locked
+    /// door stays shut until someone at it uses its <see cref="HouseKey"/> (U); key messages show as toasts here.
     /// </summary>
     public sealed class HouseDoorUi : MonoBehaviour
     {
@@ -40,6 +41,10 @@ namespace Arnafjordur.UI
             if (party == null) party = FindAnyObjectByType<PartyController>();
             BuildUi();
         }
+
+        private void OnEnable() => HouseDoor.Notice += OnDoorNotice;
+        private void OnDisable() => HouseDoor.Notice -= OnDoorNotice;
+        private void OnDoorNotice(string text) => ShowToast(text, 3.5f);
 
         private void Update()
         {
@@ -72,9 +77,16 @@ namespace Arnafjordur.UI
             return best;
         }
 
-        private static string PromptText(HouseDoor door)
+        private string PromptText(HouseDoor door)
         {
             if (door.IsInside) return "[E] Go outside";
+            if (door.IsLocked)
+            {
+                PickupItem held = party != null && party.ActiveItemHolder != null ? party.ActiveItemHolder.HeldItem : null;
+                if (held != null && held.GetComponent<HouseKey>() != null) return "[U] Unlock with the key";
+                return door.HasKnocked ? "Locked. Hold the key and press [U]" : "[E] Knock on the door";
+            }
+
             if (door.HasKnocked && door.CanGoThrough) return "[E] Go in";
             return door.HasKnocked ? "[E] Knock again" : "[E] Knock on the door";
         }
@@ -103,7 +115,7 @@ namespace Arnafjordur.UI
 
         private void Interact(HouseDoor door)
         {
-            if (door.IsInside || (door.HasKnocked && door.CanGoThrough))
+            if (door.IsInside || (door.HasKnocked && door.CanGoThrough && !door.IsLocked))
             {
                 StartCoroutine(GoThrough(door));
                 return;

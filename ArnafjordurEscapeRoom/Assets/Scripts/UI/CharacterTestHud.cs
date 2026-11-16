@@ -38,6 +38,13 @@ namespace Arnafjordur.UI
         private int _lastFishCaught;
         private bool _wasNearSeaMine;
         private bool _wasInspectingSeaMine;
+        private bool _wasNearIgniteWood;
+        private bool _wasNearStackTarget;
+        private WoodBonfire _lastNearBonfire;
+        private int _lastBonfireWoodCount;
+        private bool _lastBonfireLit;
+        private int _lastBonfireSeconds;
+        private string _lastPocketSummary = string.Empty;
         private Font _uiFont;
         private bool _built;
 
@@ -63,6 +70,8 @@ namespace Arnafjordur.UI
             {
                 party.StateChanged += RefreshView;
             }
+
+            WoodBonfire.AnyChanged += RefreshView;
         }
 
         private void OnDisable()
@@ -71,6 +80,8 @@ namespace Arnafjordur.UI
             {
                 party.StateChanged -= RefreshView;
             }
+
+            WoodBonfire.AnyChanged -= RefreshView;
         }
 
         private void Start()
@@ -86,6 +97,9 @@ namespace Arnafjordur.UI
                 party.StateChanged -= RefreshView;
                 party.StateChanged += RefreshView;
             }
+
+            WoodBonfire.AnyChanged -= RefreshView;
+            WoodBonfire.AnyChanged += RefreshView;
 
             RefreshView();
         }
@@ -110,6 +124,19 @@ namespace Arnafjordur.UI
             bool nearSeaMine = bomb != null && party.ActiveCharacter != null && bomb.IsCharacterInReach(party.ActiveCharacter);
             bool inspectingSeaMine = bomb != null && bomb.IsActiveCharacterInspecting;
 
+            Vector3 activePos = party.ActiveCharacter != null ? party.ActiveCharacter.transform.position : Vector3.zero;
+            bool holdingLighter = heldItem != null && heldItem.GetComponent<Lighter>() != null;
+            Firewood heldWood = heldItem != null ? heldItem.GetComponent<Firewood>() : null;
+            bool nearIgnite = holdingLighter && party.ActiveCharacter != null
+                && WoodBonfire.TryFindIgnitionTarget(activePos, Lighter.DefaultIgnitionReach, out _, out _);
+            bool nearStack = heldWood != null && party.ActiveCharacter != null
+                && WoodBonfire.TryFindStackTarget(activePos + party.ActiveCharacter.transform.forward * 0.55f, activePos, heldWood, 1.85f, 2.3f, out _, out _);
+            WoodBonfire nearBonfire = party.ActiveCharacter != null ? WoodBonfire.FindNearestInRange(activePos, 3.2f) : null;
+            int bonfireWoodCount = nearBonfire != null ? nearBonfire.WoodCount : 0;
+            bool bonfireLit = nearBonfire != null && nearBonfire.IsLit;
+            int bonfireSeconds = nearBonfire != null ? Mathf.CeilToInt(nearBonfire.RemainingSeconds) : 0;
+            string pocketSummary = GetPocketSummary(party.ActiveCharacter);
+
             if (usingItem != _wasUsingItem
                 || stage != _lastDrunkStage
                 || sipsDrunk != _lastSipsDrunk
@@ -117,7 +144,14 @@ namespace Arnafjordur.UI
                 || rodState != _lastRodState
                 || fishCaught != _lastFishCaught
                 || nearSeaMine != _wasNearSeaMine
-                || inspectingSeaMine != _wasInspectingSeaMine)
+                || inspectingSeaMine != _wasInspectingSeaMine
+                || nearIgnite != _wasNearIgniteWood
+                || nearStack != _wasNearStackTarget
+                || nearBonfire != _lastNearBonfire
+                || bonfireWoodCount != _lastBonfireWoodCount
+                || bonfireLit != _lastBonfireLit
+                || bonfireSeconds != _lastBonfireSeconds
+                || pocketSummary != _lastPocketSummary)
             {
                 RefreshView();
                 return;
@@ -285,12 +319,41 @@ namespace Arnafjordur.UI
             _lastRodState = heldRod != null ? heldRod.State : FishingRod.RodState.Idle;
             _lastFishCaught = heldRod != null ? heldRod.FishCaughtCount : 0;
 
+            Vector3 activePos = party != null && party.ActiveCharacter != null ? party.ActiveCharacter.transform.position : Vector3.zero;
+            Lighter heldLighter = held != null ? held.GetComponent<Lighter>() : null;
+            Firewood heldWood = held != null ? held.GetComponent<Firewood>() : null;
+
+            WoodBonfire igniteBonfire = null;
+            Firewood igniteLoose = null;
+            _wasNearIgniteWood = heldLighter != null && party != null && party.ActiveCharacter != null
+                && WoodBonfire.TryFindIgnitionTarget(activePos, Lighter.DefaultIgnitionReach, out igniteBonfire, out igniteLoose);
+
+            WoodBonfire stackBonfire = null;
+            Firewood stackLoose = null;
+            _wasNearStackTarget = heldWood != null && party != null && party.ActiveCharacter != null
+                && WoodBonfire.TryFindStackTarget(activePos + party.ActiveCharacter.transform.forward * 0.55f, activePos, heldWood, 1.85f, 2.3f, out stackBonfire, out stackLoose);
+
+            _lastNearBonfire = party != null && party.ActiveCharacter != null ? WoodBonfire.FindNearestInRange(activePos, 3.2f) : null;
+            _lastBonfireWoodCount = _lastNearBonfire != null ? _lastNearBonfire.WoodCount : 0;
+            _lastBonfireLit = _lastNearBonfire != null && _lastNearBonfire.IsLit;
+            _lastBonfireSeconds = _lastNearBonfire != null ? Mathf.CeilToInt(_lastNearBonfire.RemainingSeconds) : 0;
+
             if (held != null)
             {
                 if (heldRod != null)
                 {
                     _useLabel.text = $"{heldRod.ActionLabel} {held.DisplayName} [U]";
                     _useBackground.color = heldRod.State == FishingRod.RodState.Bite ? Palette.UiAccentAmber : Palette.UiConfirmGreen;
+                }
+                else if (_wasNearIgniteWood)
+                {
+                    _useLabel.text = igniteBonfire != null ? "Light Bonfire [U]" : "Light Wood [U]";
+                    _useBackground.color = Palette.UiAccentAmber;
+                }
+                else if (_wasNearStackTarget)
+                {
+                    _useLabel.text = stackBonfire != null ? "Add to Bonfire [U]" : "Stack Wood [U]";
+                    _useBackground.color = Palette.UiConfirmGreen;
                 }
                 else
                 {
@@ -304,8 +367,17 @@ namespace Arnafjordur.UI
                 _useLabel.color = Palette.DeepFjordSlate;
                 _useLabel.fontStyle = FontStyle.Bold;
 
-                _itemLabel.text = $"Drop {held.DisplayName} [G]";
-                _itemBackground.color = Palette.UiAccentAmber;
+                if (_wasNearStackTarget)
+                {
+                    _itemLabel.text = stackBonfire != null ? "Add to Bonfire [G]" : "Stack on Wood [G]";
+                    _itemBackground.color = Palette.UiConfirmGreen;
+                }
+                else
+                {
+                    _itemLabel.text = $"Drop {held.DisplayName} [G]";
+                    _itemBackground.color = Palette.UiAccentAmber;
+                }
+
                 _itemLabel.color = Palette.DeepFjordSlate;
                 _itemLabel.fontStyle = FontStyle.Bold;
             }
@@ -348,10 +420,41 @@ namespace Arnafjordur.UI
                 ? "  •  Esc: Stand Up  •  1-3/Tab: Switch Player"
                 : (_wasNearSeaMine ? "  •  E / Click Mine: Inspect Bomb" : string.Empty);
 
+            string fireSegment = string.Empty;
+            if (_lastNearBonfire != null)
+            {
+                string duration = WoodBonfire.FormatDuration(_lastNearBonfire.RemainingSeconds);
+                string state = _lastNearBonfire.IsLit ? $"{duration} left" : $"{duration} fuel (Unlit)";
+                fireSegment = $"  |  Bonfire ({_lastNearBonfire.WoodCount} wood): {state}";
+            }
+
+            _lastPocketSummary = GetPocketSummary(party != null ? party.ActiveCharacter : null);
+            string pocketSegment = string.IsNullOrEmpty(_lastPocketSummary) ? string.Empty : $"  |  Pocket: {_lastPocketSummary}";
+
             _statusLabel.text =
-                $"Active: {activeName}  |  View: {viewMode}  |  Companions: {mode}  |  Held: {heldName}{fishSegment}  |  Drunk: {drunkStatus}   —   " +
+                $"Active: {activeName}  |  View: {viewMode}  |  Companions: {mode}  |  Held: {heldName}{pocketSegment}{fishSegment}{fireSegment}  |  Drunk: {drunkStatus}   —   " +
                 "WASD/Arrows: Move  •  Shift: Run  •  Click: Move  •  Right-Drag/Q-E: Look  •  Scroll: Zoom  •  V: 1st/3rd  •  1-3/Tab: Switch  •  F/R: Follow/Roam  •  U/Space: Use  •  G / Click Item: Drop/Take  •  I: Pockets" +
                 inspectHint;
+        }
+
+        private static string GetPocketSummary(CharacterMotor active)
+        {
+            if (active == null || !active.TryGetComponent(out CharacterPockets pockets) || pockets.Items.Count == 0)
+            {
+                return string.Empty;
+            }
+
+            var names = new System.Collections.Generic.List<string>();
+            for (int i = 0; i < pockets.Items.Count; i++)
+            {
+                PickupItem it = pockets.Items[i];
+                if (it != null && !it.gameObject.activeSelf && it.transform.parent == pockets.transform)
+                {
+                    names.Add(it.DisplayName);
+                }
+            }
+
+            return names.Count > 0 ? string.Join(", ", names) : string.Empty;
         }
 
         private GameObject CreatePanel(string name, RectTransform parent, Vector2 anchor, Vector2 pivot, Vector2 anchoredPos, Vector2 size, Color color)

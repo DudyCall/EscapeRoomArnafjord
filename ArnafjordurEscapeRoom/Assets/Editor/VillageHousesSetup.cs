@@ -14,10 +14,11 @@ namespace Arnafjordur.Editor
     /// Village houses from VillageHouses.json (written by build_tunnel_exit.py --houses-only): makes every front door
     /// the players can walk up to knockable (<see cref="HouseDoor"/>), and builds the rooms inside the teal house by
     /// the beach (OSM building 21 plus its entrance wing, building 38): entrance hall, hallway, kitchen, living room,
-    /// bathroom and bedroom (<see cref="HouseInterior"/>). Called by <see cref="VillageSceneSetup.Build"/> once the
-    /// walkable area exists.
+    /// bathroom and bedroom (<see cref="HouseInterior"/>). The black boathouse by the end of the road (building 50) gets
+    /// its own walkway, a hay loft and a boat room: see VillageHousesSetup.Boathouse.cs. Called by
+    /// <see cref="VillageSceneSetup.Build"/> once the walkable area exists.
     /// </summary>
-    public static class VillageHousesSetup
+    public static partial class VillageHousesSetup
     {
         public const string HousesJsonPath = "Assets/Environment/TunnelExit/VillageHouses.json";
         private const string InteriorDir = "Assets/Environment/Village/Interior";
@@ -85,9 +86,12 @@ namespace Arnafjordur.Editor
             public float Line, A0, A1, HalfDepth;
         }
 
-        private sealed class TealHouseResult
+        /// <summary>One house with rooms inside: its doors seen from inside, walkable floor zones and preview shots.</summary>
+        private sealed class InteriorResult
         {
             public HouseInterior Interior;
+            public string Reply = TealReply;
+            public string LockId;   // set for a front door that starts locked
             public readonly Dictionary<int, HouseDoor> InsideDoors = new Dictionary<int, HouseDoor>();
             public readonly Dictionary<int, Vector3> InsideStand = new Dictionary<int, Vector3>();
             public readonly List<WalkableArea.Zone> Zones = new List<WalkableArea.Zone>();
@@ -96,9 +100,10 @@ namespace Arnafjordur.Editor
             public readonly List<(string file, Vector3 eye, Vector3 look)> Shots = new List<(string, Vector3, Vector3)>();
         }
 
-        public static void Build(WalkableArea area)
+        public static void Build(WalkableArea area, float seaLevel)
         {
-            foreach (string old in new[] { DoorsRootName, InteriorRootName })
+            LastShots.Clear();
+            foreach (string old in new[] { DoorsRootName, InteriorRootName, BoathouseRootName, BoathouseOutsideName })
             {
                 GameObject existing = GameObject.Find(old);
                 if (existing != null) UnityEngine.Object.DestroyImmediate(existing);
@@ -116,7 +121,11 @@ namespace Arnafjordur.Editor
 
             HouseData main = houses.FirstOrDefault(h => h.index == TealHouse);
             HouseData wing = houses.FirstOrDefault(h => h.index == TealWing);
-            TealHouseResult teal = main != null && wing != null ? BuildTealHouse(main, wing, shell) : null;
+            InteriorResult teal = main != null && wing != null ? BuildTealHouse(main, wing, shell) : null;
+            HouseData boathouseData = houses.FirstOrDefault(h => h.index == Boathouse);
+            // The boathouse also adds its outdoor walkway to the area here, so its door counts as reachable below.
+            InteriorResult boathouse = boathouseData != null ? BuildBoathouse(boathouseData, shell, area, seaLevel) : null;
+            var interiors = new[] { teal, boathouse }.Where(r => r != null).ToList();
 
             // Doors first, while the walkable area is still only outdoors (the rooms are added to it afterwards).
             var doorsRoot = new GameObject(DoorsRootName);
@@ -142,13 +151,15 @@ namespace Arnafjordur.Editor
                     trigger.size = new Vector3(o.width + 0.12f, o.height, 0.12f);
 
                     var door = go.AddComponent<HouseDoor>();
-                    bool leadsIn = teal != null && teal.InsideDoors.ContainsKey(h.index);
+                    InteriorResult leadsIn = interiors.FirstOrDefault(r => r.InsideDoors.ContainsKey(h.index));
                     float reach = Mathf.Max(1.9f, distance + 0.6f);
-                    if (leadsIn)
+                    if (leadsIn != null)
                     {
-                        HouseDoor inside = teal.InsideDoors[h.index];
-                        door.Configure(reach, stand, TealReply, teal.Interior, inside, false);
-                        inside.Configure(1.7f, teal.InsideStand[h.index], "", teal.Interior, door, true);
+                        HouseDoor inside = leadsIn.InsideDoors[h.index];
+                        door.Configure(reach, stand, leadsIn.Reply, leadsIn.Interior, inside, false);
+                        if (!string.IsNullOrEmpty(leadsIn.LockId)) door.SetLock(leadsIn.LockId, true);
+                        if (leadsIn == boathouse && _boathouseProbe != null) _boathouseProbe.FrontDoor = door;
+                        inside.Configure(1.7f, leadsIn.InsideStand[h.index], "", leadsIn.Interior, door, true);
                         EditorUtility.SetDirty(inside);
                     }
                     else
@@ -161,21 +172,27 @@ namespace Arnafjordur.Editor
                 }
             }
 
-            if (teal != null)
+            foreach (InteriorResult r in interiors)
             {
-                foreach (KeyValuePair<int, HouseDoor> pair in teal.InsideDoors)
+                foreach (KeyValuePair<int, HouseDoor> pair in r.InsideDoors)
                 {
                     // A door whose outside can't be reached stays shut from the inside too.
-                    if (pair.Value.OtherSide == null) UnityEngine.Object.DestroyImmediate(pair.Value);
+                    if (pair.Value.OtherSide == null)
+                    {
+                        Debug.LogWarning($"[VillageHousesSetup] The {r.Interior.HouseName} door of building {pair.Key} can't be reached from outside.");
+                        UnityEngine.Object.DestroyImmediate(pair.Value);
+                    }
                 }
 
-                area.Configure(area.Corridors, area.Zones.Concat(teal.Zones).ToArray());
-                EditorUtility.SetDirty(area);
-                PressTerrainUnder(teal.Floors);
+                area.Configure(area.Corridors, area.Zones.Concat(r.Zones).ToArray());
+                LastShots.AddRange(r.Shots.Select(s => (r.Root, s.file, s.eye, s.look)));
             }
 
+            EditorUtility.SetDirty(area);
+            if (teal != null) PressTerrainUnder(teal.Floors);
+
             Physics.SyncTransforms();
-            Debug.Log($"[VillageHousesSetup] {knockable} knockable doors ({skipped} out of reach), teal house interior: {(teal != null ? "built" : "missing")}");
+            Debug.Log($"[VillageHousesSetup] {knockable} knockable doors ({skipped} out of reach), teal house interior: {(teal != null ? "built" : "missing")}, boathouse: {(boathouse != null ? "built" : "missing")}");
         }
 
         private static string ReplyFor(HouseData h, int i)
@@ -225,7 +242,7 @@ namespace Arnafjordur.Editor
 
         // ------------------------------------------------------------------ the teal house
 
-        private static TealHouseResult BuildTealHouse(HouseData main, HouseData wing, Collider shell)
+        private static InteriorResult BuildTealHouse(HouseData main, HouseData wing, Collider shell)
         {
             float floorWorld = main.y + main.plinthH + FloorLift;
             var root = new GameObject(InteriorRootName);
@@ -312,7 +329,7 @@ namespace Arnafjordur.Editor
             float FloorAt(Vector3 local) => porch.Holds(local) && local.x < stairX ? wingFloor : 0f;
             float CeilAt(Vector3 local) => porch.Holds(local) ? wingCeil : ceil;
 
-            var result = new TealHouseResult { Root = rt };
+            var result = new InteriorResult { Root = rt };
             BuildWindows(kit, rt, main, FloorAt, CeilAt);
             BuildWindows(kit, rt, wing, FloorAt, CeilAt);
             CheckWindowsMissPartitions(rt, main, new[] { PxA, PxB }, new[] { PzBath, PzKitchen }, PxB, ceil);
@@ -368,13 +385,11 @@ namespace Arnafjordur.Editor
             result.Shots.Add(("interior_bedroom.png", new Vector3(-1.3f, Eye, 0.3f), new Vector3(0.6f, 0.6f, 2.6f)));
             result.Shots.Add(("interior_bathroom.png", new Vector3(-2.2f, Eye, -1.55f), new Vector3(-4.2f, 0.6f, -2.9f)));
             result.Shots.Add(("interior_entrancehall.png", new Vector3(WX1 - 0.3f, Eye + 0.2f, PassZ1), new Vector3(WX0 + 0.5f, wingFloor + 0.8f, WZ0 + 0.6f)));
-            LastShots = result.Shots;
-            LastRoot = rt;
             return result;
         }
 
-        private static List<(string file, Vector3 eye, Vector3 look)> LastShots;
-        private static Transform LastRoot;
+        /// <summary>Preview shots from the last build, with eye and target in the frame of <c>root</c>.</summary>
+        private static readonly List<(Transform root, string file, Vector3 eye, Vector3 look)> LastShots = new List<(Transform, string, Vector3, Vector3)>();
 
         private static IEnumerable<Vector3> Corners(HouseData h)
         {
@@ -816,22 +831,29 @@ namespace Arnafjordur.Editor
             Debug.Log($"[VillageHousesSetup] pressed {moved} terrain vertices under the teal house");
         }
 
-        /// <summary>Saves a few shots from inside the teal house to Docs/preview (called from the village preview pass).</summary>
+        /// <summary>Saves shots of the teal house and the boathouse to Docs/preview (called from the village preview pass).</summary>
         public static void RenderPreviews(Camera cam, string previewDir, Action<Camera, string> shot)
         {
-            if (LastShots == null || LastRoot == null || cam == null) return;
+            if (LastShots.Count == 0 || cam == null) return;
             Vector3 keepPos = cam.transform.position;
             Quaternion keepRot = cam.transform.rotation;
             float keepFov = cam.fieldOfView, keepNear = cam.nearClipPlane;
             cam.nearClipPlane = 0.05f;
-            foreach ((string file, Vector3 eye, Vector3 look) in LastShots)
+            // Rooms are only switched on while someone is inside; outside shots shouldn't show their lamps through the walls.
+            GameObject[] rooms = UnityEngine.Object.FindObjectsByType<HouseInterior>(FindObjectsInactive.Include)
+                .Select(hi => hi.transform.Find("Rooms")?.gameObject).Where(g => g != null).ToArray();
+            foreach ((Transform root, string file, Vector3 eye, Vector3 look) in LastShots)
             {
-                cam.transform.position = LastRoot.TransformPoint(eye);
-                cam.transform.LookAt(LastRoot.TransformPoint(look));
-                cam.fieldOfView = 68f;
+                if (root == null) continue;
+                bool indoors = file.StartsWith("interior_");
+                foreach (GameObject g in rooms) g.SetActive(indoors);
+                cam.transform.position = root.TransformPoint(eye);
+                cam.transform.LookAt(root.TransformPoint(look));
+                cam.fieldOfView = indoors ? 68f : 50f;
                 shot(cam, Path.Combine(previewDir, file));
             }
 
+            foreach (GameObject g in rooms) g.SetActive(true);
             cam.transform.SetPositionAndRotation(keepPos, keepRot);
             cam.fieldOfView = keepFov;
             cam.nearClipPlane = keepNear;

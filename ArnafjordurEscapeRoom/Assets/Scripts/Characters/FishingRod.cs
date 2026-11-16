@@ -34,6 +34,12 @@ namespace Arnafjordur.Characters
         private const float RippleLifetimeSeconds = 0.9f;
         private const int LineSegments = 8;
 
+        /// <summary>Probability (20%) of reeling in the wire-cutting clue note instead of a fish.</summary>
+        public const float NoteCatchChance = 0.20f;
+
+        /// <summary>Clue written on the fished-up note pointing to the radio for the wire colours.</summary>
+        public const string WireClueText = "Lurtað eftir radionum, so finna tit litirnar";
+
         private static readonly float[] WaterProbeDistances = { 7.5f, 6.0f, 9.5f, 4.8f, 11.5f };
 
         private struct ActiveRipple
@@ -69,6 +75,8 @@ namespace Arnafjordur.Characters
         private float _nextAmbientRippleTime;
         private float _nextSplashTime;
         private bool _castInWater;
+        private bool _hookedNote;
+        private bool? _nextCatchNoteOverride;
         private Vector3 _castOriginPos;
         private Vector3 _castTargetPos;
         private Vector3 _bobberLandedPos;
@@ -85,6 +93,15 @@ namespace Arnafjordur.Characters
 
         /// <summary>Total number of fish landed with this rod.</summary>
         public int FishCaughtCount { get; private set; }
+
+        /// <summary>True once the wire-clue note has been fished up.</summary>
+        public bool HasCaughtNote { get; private set; }
+
+        /// <summary>Most recently fished-up clue note, if any.</summary>
+        public ClueNote LastCaughtNote { get; private set; }
+
+        /// <summary>Overrides the next bite's note-vs-fish roll (used by editor verification).</summary>
+        public void SetNextCatchNoteOverride(bool? isNote) => _nextCatchNoteOverride = isNote;
 
         /// <summary>Current world-space position of the bobber.</summary>
         public Vector3 BobberWorldPosition => bobber != null ? bobber.position : transform.position;
@@ -141,6 +158,10 @@ namespace Arnafjordur.Characters
             State = RodState.Idle;
             HasHookedFish = false;
             FishCaughtCount = 0;
+            HasCaughtNote = false;
+            LastCaughtNote = null;
+            _hookedNote = false;
+            _nextCatchNoteOverride = null;
             _stateElapsed = 0f;
             _displayCatchTimer = 0f;
             _castInWater = false;
@@ -332,10 +353,18 @@ namespace Arnafjordur.Characters
                     {
                         if (HasHookedFish)
                         {
-                            FishCaughtCount++;
-                            _displayCatchTimer = CatchDisplaySeconds;
+                            if (_hookedNote)
+                            {
+                                GiveCaughtNoteToHolder();
+                            }
+                            else
+                            {
+                                FishCaughtCount++;
+                                _displayCatchTimer = CatchDisplaySeconds;
+                            }
                         }
 
+                        _hookedNote = false;
                         HasHookedFish = false;
                         State = RodState.Idle;
                         _stateElapsed = 0f;
@@ -405,7 +434,7 @@ namespace Arnafjordur.Characters
 
             Vector3 tipPos = rodTip != null ? rodTip.position : transform.position + transform.up * 1.45f;
             Vector3 bobberPos = ComputeBobberWorldPosition(tipPos);
-            bool showFish = (State == RodState.Reeling && HasHookedFish) || (State == RodState.Idle && _displayCatchTimer > 0f);
+            bool showFish = (State == RodState.Reeling && HasHookedFish && !_hookedNote) || (State == RodState.Idle && _displayCatchTimer > 0f);
 
             if (bobber != null)
             {
@@ -467,6 +496,9 @@ namespace Arnafjordur.Characters
         {
             ResolveParts();
             HasHookedFish = hookFish;
+            bool rollNote = _nextCatchNoteOverride ?? (!HasCaughtNote && UnityEngine.Random.value < NoteCatchChance);
+            _nextCatchNoteOverride = null;
+            _hookedNote = hookFish && !HasCaughtNote && rollNote;
             _reelStartPos = bobber != null ? bobber.position : _bobberLandedPos;
             if (HasHookedFish && _castInWater)
             {
@@ -480,6 +512,31 @@ namespace Arnafjordur.Characters
             {
                 _pickup.SetUseVerb(ActionLabel);
             }
+        }
+
+        private void GiveCaughtNoteToHolder()
+        {
+            HasCaughtNote = true;
+            ClueNote note = ClueNote.CreateNoteObject("WireClueNote", "Note", WireClueText);
+            LastCaughtNote = note;
+            PickupItem noteItem = note.GetComponent<PickupItem>();
+
+            CharacterItemHolder holder = _pickup != null ? _pickup.Holder : null;
+            if (holder != null)
+            {
+                if (!holder.TryGetComponent(out CharacterPockets pockets))
+                {
+                    pockets = holder.gameObject.AddComponent<CharacterPockets>();
+                }
+
+                pockets.Add(noteItem);
+            }
+            else
+            {
+                note.transform.position = transform.position;
+            }
+
+            HouseDoor.Announce("Caught a note! Drop the rod [G] and press [I] to take it out, then [U] to read.");
         }
 
         private float ComputeRodPitchDegrees()

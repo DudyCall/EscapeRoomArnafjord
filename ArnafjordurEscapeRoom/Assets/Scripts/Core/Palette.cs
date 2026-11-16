@@ -38,6 +38,27 @@ namespace Arnafjordur.Core
         public static readonly Color InteriorCeramic      = new Color32(0xF6, 0xF6, 0xF3, 0xFF); // #F6F6F3
         public static readonly Color InteriorLampGlow     = new Color32(0xFF, 0xD7, 0xA0, 0xFF); // #FFD7A0
 
+        // The black boathouse: board-walled hay loft with sheep upstairs, concrete boat room with a Faroese boat below
+        public static readonly Color BarnPlank            = new Color32(0x8C, 0x6A, 0x4A, 0xFF); // #8C6A4A
+        public static readonly Color BarnPlankDark        = new Color32(0x4E, 0x3A, 0x2A, 0xFF); // #4E3A2A
+        public static readonly Color HayStraw             = new Color32(0xD2, 0xB2, 0x62, 0xFF); // #D2B262
+        public static readonly Color HayDry               = new Color32(0x9E, 0x84, 0x4A, 0xFF); // #9E844A
+        public static readonly Color SheepWoolCream       = new Color32(0xDD, 0xD3, 0xBE, 0xFF); // #DDD3BE
+        public static readonly Color SheepWoolBrown       = new Color32(0x6E, 0x50, 0x3B, 0xFF); // #6E503B
+        public static readonly Color SheepWoolDark        = new Color32(0x3B, 0x33, 0x2E, 0xFF); // #3B332E
+        public static readonly Color SheepWoolGrey        = new Color32(0x9C, 0x96, 0x8C, 0xFF); // #9C968C
+        public static readonly Color SheepFace            = new Color32(0x2C, 0x25, 0x21, 0xFF); // #2C2521
+        public static readonly Color BoathouseConcrete    = new Color32(0x9A, 0x98, 0x92, 0xFF); // #9A9892
+        public static readonly Color BoatHullWhite        = new Color32(0xE6, 0xE3, 0xDA, 0xFF); // #E6E3DA
+        public static readonly Color BoatStrakeBlue       = new Color32(0x2F, 0x5C, 0x8A, 0xFF); // #2F5C8A
+        public static readonly Color BoatTar              = new Color32(0x2A, 0x24, 0x20, 0xFF); // #2A2420
+        public static readonly Color BoatInteriorWood     = new Color32(0xB0, 0x8A, 0x5E, 0xFF); // #B08A5E
+        public static readonly Color FishCrateBlue        = new Color32(0x3C, 0x6E, 0x9C, 0xFF); // #3C6E9C
+        public static readonly Color NetGreen             = new Color32(0x3E, 0x5A, 0x48, 0xFF); // #3E5A48
+        public static readonly Color GunWalnut            = new Color32(0x5E, 0x3A, 0x22, 0xFF); // #5E3A22
+        public static readonly Color GunBluedSteel        = new Color32(0x2A, 0x2E, 0x33, 0xFF); // #2A2E33
+        public static readonly Color GunBrass             = new Color32(0xB8, 0x96, 0x3E, 0xFF); // #B8963E
+
         // UI surfaces and readable contrast accents
         public static readonly Color UiPanelSlate     = new Color32(0x16, 0x20, 0x29, 0xEE); // #162029
         public static readonly Color UiTextParchment  = new Color32(0xF1, 0xEC, 0xE1, 0xFF); // #F1ECE1
