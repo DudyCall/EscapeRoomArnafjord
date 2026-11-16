@@ -150,6 +150,8 @@ namespace Arnafjordur.Editor
             Physics.SyncTransforms();
             BuildBeachWood(walkableData.seaLevel, seaMine != null ? seaMine.transform.position : Vector3.positiveInfinity);
             var walkableArea = BuildWalkableAndFootpaths(walkableData);
+            AssetDatabase.DeleteAsset(PocketMeshPath);
+            VillageHousesSetup.Build(walkableArea, walkableData.seaLevel);
             FjordWaterSetup.ApplyToExisting();
 
             CharacterMotor[] motors = ExtractAndConfigurePlayers(exit, carGo, walkableArea, locomotionControllers, idleClips);
@@ -167,6 +169,7 @@ namespace Arnafjordur.Editor
             VerifyDrunkProgression(motors, cam);
             VerifyFishingRod(carGo, motors, cam);
             VerifySeaMineBomb(seaMine, motors, cam);
+            VillageHousesSetup.VerifyBoathouse(motors[0]);
             RenderPreviewFrames(cam, motors);
 
             var buildScenes = EditorBuildSettings.scenes.ToList();
@@ -1744,6 +1747,7 @@ namespace Arnafjordur.Editor
 
         /// <summary>
         /// Each friend carries something of their own, hidden until taken out with I. Andrias: cigarettes and a lighter.
+        /// Leivur: the key to the black boathouse.
         /// </summary>
         private static void BuildPocketItems(string character, Transform charTransform)
         {
@@ -1752,6 +1756,14 @@ namespace Arnafjordur.Editor
             {
                 foreach (PickupItem old in oldPockets.Items.ToArray()) if (old != null) UnityEngine.Object.DestroyImmediate(old.gameObject);
                 UnityEngine.Object.DestroyImmediate(oldPockets);
+            }
+
+            if (character == "Leivur")
+            {
+                var keyPocket = charTransform.gameObject.AddComponent<CharacterPockets>();
+                keyPocket.Add(BuildBoathouseKey());
+                EditorUtility.SetDirty(keyPocket);
+                return;
             }
 
             if (character != "Andrias") return;
@@ -2053,7 +2065,6 @@ namespace Arnafjordur.Editor
 
         private static PickupItem BuildCigarettePack()
         {
-            AssetDatabase.DeleteAsset(PocketMeshPath);
             const float w = 0.055f, h = 0.088f, d = 0.022f, r = 0.0025f;
             const float lidH = h * 0.30f, bodyH = h - lidH;
             float lidFrom = bodyH / h;
@@ -2210,10 +2221,91 @@ namespace Arnafjordur.Editor
             return item;
         }
 
+        /// <summary>
+        /// Builds a chunky key <see cref="PickupItem"/> (bow, shank, collar, notched bit) with the shared held pose.
+        /// Used for both Leivur's iron boathouse key and the brass sea-mine keys placed in the village.
+        /// </summary>
+        internal static PickupItem BuildKeyObject(string goName, string displayName, Material metalMat, string meshPrefix,
+            out float bowRadius, out float bowTubeRadius, out float shankLength)
+        {
+            bowRadius = 0.020f;
+            bowTubeRadius = 0.0046f;
+            shankLength = 0.088f;
+            const float sr = 0.0050f;
+            var root = new GameObject(goName);
+
+            var bow = new Vector2[17];
+            for (int i = 0; i < bow.Length; i++)
+            {
+                float a = -Mathf.PI * 0.5f + 2f * Mathf.PI * i / (bow.Length - 1);
+                bow[i] = new Vector2(bowRadius + bowTubeRadius * Mathf.Cos(a), bowTubeRadius * Mathf.Sin(a));
+            }
+
+            PocketPart("Bow", root.transform, LatheMesh(meshPrefix + "_Bow", bow, 20), metalMat, Vector3.zero);
+            Mesh rod = LatheMesh(meshPrefix + "_Shank", new[] { new Vector2(0f, 0f), new Vector2(sr, 0f), new Vector2(sr, shankLength), new Vector2(0f, shankLength) }, 10);
+            PocketPart("Shank", root.transform, rod, metalMat, new Vector3(0f, 0f, bowRadius), null, Quaternion.Euler(90f, 0f, 0f));
+            Mesh collar = LatheMesh(meshPrefix + "_Collar", new[] { new Vector2(0f, 0f), new Vector2(sr * 1.85f, 0f), new Vector2(sr * 1.85f, 0.008f), new Vector2(0f, 0.008f) }, 10);
+            PocketPart("Collar", root.transform, collar, metalMat, new Vector3(0f, 0f, bowRadius + 0.003f), null, Quaternion.Euler(90f, 0f, 0f));
+            float bitZ = bowRadius + shankLength - 0.015f;
+            PocketPart("Bit", root.transform, RoundedPrism(meshPrefix + "_Bit", 0.018f, 0.0052f, 0.020f, 0.0012f, 2), metalMat, new Vector3(0.010f, 0f, bitZ));
+            PocketPart("BitToothFront", root.transform, RoundedPrism(meshPrefix + "_BitToothFront", 0.008f, 0.0054f, 0.007f, 0.0008f, 1), metalMat, new Vector3(0.020f, 0f, bitZ + 0.0065f));
+            PocketPart("BitToothBack", root.transform, RoundedPrism(meshPrefix + "_BitToothBack", 0.008f, 0.0054f, 0.006f, 0.0008f, 1), metalMat, new Vector3(0.020f, 0f, bitZ - 0.007f));
+
+            float zMin = -bowRadius - bowTubeRadius, zMax = bowRadius + shankLength;
+            var box = root.AddComponent<BoxCollider>();
+            box.center = new Vector3(0.008f, 0f, (zMin + zMax) * 0.5f);
+            box.size = new Vector3(0.054f, 0.024f, zMax - zMin + 0.016f);
+            var item = root.AddComponent<PickupItem>();
+            item.Configure(displayName, 0.006f, 0.005f, true, "Use", false);
+            // Pinched by the bow at the thumb/index edge (-X = forward, +Z = right), blade pointing forward & slightly outward, bit tilted visibly.
+            item.SetHeldPose(new Vector3(-0.035f, 0.005f, 0.014f), new Vector3(-12f, -70f, 24f));
+            return item;
+        }
+
+        /// <summary>Creates a brass key that fits the sea mine's Module 4 keyholes.</summary>
+        internal static PickupItem BuildBombKeyObject(string goName, string displayName = "Brass Key")
+        {
+            Material brass = PropMaterial("Mat_Key_Brass", Color.Lerp(Palette.LanternAmber, Palette.SunbreakKey, 0.35f), 0.62f, 0.80f);
+            PickupItem item = BuildKeyObject(goName, displayName, brass, "BombKey", out _, out _, out _);
+            item.gameObject.AddComponent<BombKey>().Configure(true);
+            return item;
+        }
+
+        /// <summary>
+        /// Leivur's old iron key to the black boathouse, on a wooden tag: it opens the boathouse door
+        /// (<see cref="HouseKey"/>). It is also a <see cref="BombKey"/> that doesn't fit, so tried in the sea mine it
+        /// goes in but won't turn.
+        /// </summary>
+        private static PickupItem BuildBoathouseKey()
+        {
+            Material iron = PropMaterial("Mat_Key_Iron", Color.Lerp(Palette.WetBasalt, Palette.InteriorSteel, 0.72f), 0.65f, 0.85f);
+            Material wood = PropMaterial("Mat_Key_Tag", Color.Lerp(Palette.DriftwoodTimber, Palette.InteriorBirch, 0.35f), 0.25f);
+            Material paint = PropMaterial("Mat_Key_TagPaint", Palette.BoathouseRust * 1.15f, 0.32f);
+            PickupItem item = BuildKeyObject("BoathouseKey", "Boathouse Key", iron, "Key", out float R, out _, out float shank);
+            GameObject root = item.gameObject;
+
+            // Wooden tag on a pivot at the bottom-back of the bow so it hangs straight down clear of the fingers when held and lies flat when dropped.
+            const float tagLen = 0.064f;
+            var tagPivot = new GameObject("TagPivot").transform;
+            tagPivot.SetParent(root.transform, false);
+            tagPivot.localPosition = new Vector3(0f, -0.004f, -R * 0.85f);
+            PocketPart("TagRing", tagPivot, RoundedPrism("Key_TagRing", 0.010f, 0.0056f, 0.010f, 0.004f, 3), iron, new Vector3(0f, 0f, -0.003f));
+            PocketPart("Tag", tagPivot, RoundedPrism("Key_Tag", 0.032f, 0.007f, tagLen, 0.010f, 4), wood, new Vector3(0f, 0f, -0.036f));
+            PocketPart("TagPaint", tagPivot, RoundedPrism("Key_TagPaint", 0.0326f, 0.0074f, 0.018f, 0.005f, 3), paint, new Vector3(0f, 0f, -0.059f));
+
+            float zMin = tagPivot.localPosition.z - 0.068f, zMax = R + shank;
+            BoxCollider box = root.GetComponent<BoxCollider>();
+            box.center = new Vector3(0.006f, 0f, (zMin + zMax) * 0.5f);
+            box.size = new Vector3(0.050f, 0.016f, zMax - zMin);
+            root.AddComponent<HouseKey>().Configure(VillageHousesSetup.BoathouseLockId, tagPivot);
+            root.AddComponent<BombKey>().Configure(false);
+            return item;
+        }
+
         /// <summary>Close-up of Andrias's pocket items (pack and a lit lighter) for checking their look.</summary>
         private static void RenderPocketItemsShot(Camera cam, string file)
         {
-            CharacterPockets pockets = UnityEngine.Object.FindObjectsByType<CharacterPockets>(FindObjectsSortMode.None).FirstOrDefault();
+            CharacterPockets pockets = UnityEngine.Object.FindObjectsByType<CharacterPockets>(FindObjectsSortMode.None).FirstOrDefault(p => p.name == "Andrias");
             if (pockets == null || pockets.Items.Count == 0) return;
 
             var saved = new List<(PickupItem item, Transform parent, Vector3 pos, Quaternion rot, bool active)>();
@@ -2273,6 +2365,47 @@ namespace Arnafjordur.Editor
                     t.localRotation = sv.rot;
                     t.gameObject.SetActive(sv.active);
                 }
+            }
+        }
+
+        /// <summary>Renders Leivur standing in idle holding the boathouse key so the grip and visibility can be verified.</summary>
+        private static void RenderKeyCarryShot(Camera cam, CharacterMotor[] motors, string file)
+        {
+            CharacterMotor leivur = motors != null ? motors.FirstOrDefault(m => m != null && m.name == "Leivur") : null;
+            if (leivur == null) return;
+
+            GameObject clone = UnityEngine.Object.Instantiate(leivur.gameObject, leivur.transform.parent);
+            clone.name = "Leivur_KeyShot";
+            leivur.gameObject.SetActive(false);
+            Vector3 keepPos = cam.transform.position;
+            Quaternion keepRot = cam.transform.rotation;
+            float keepFov = cam.fieldOfView;
+            try
+            {
+                AnimationClip idleClip = LoadIdleClip("Leivur");
+                if (idleClip != null) idleClip.SampleAnimation(clone, 0f);
+
+                if (clone.TryGetComponent(out CharacterItemHolder holder) && clone.TryGetComponent(out CharacterPockets pockets))
+                {
+                    Transform clonedBeer = FindChildByName(clone.transform, "Beer");
+                    if (clonedBeer != null) UnityEngine.Object.DestroyImmediate(clonedBeer.gameObject);
+                    pockets.Cycle(holder);
+                    holder.PoseHeldItem();
+                }
+
+                Vector3 target = clone.transform.TransformPoint(new Vector3(0.16f, 0.96f, 0.28f));
+                cam.transform.position = clone.transform.TransformPoint(new Vector3(-0.70f, 1.38f, 0.85f));
+                cam.transform.LookAt(target);
+                cam.fieldOfView = 34f;
+                Shot(cam, null);
+                Shot(cam, file);
+            }
+            finally
+            {
+                cam.transform.SetPositionAndRotation(keepPos, keepRot);
+                cam.fieldOfView = keepFov;
+                UnityEngine.Object.DestroyImmediate(clone);
+                leivur.gameObject.SetActive(true);
             }
         }
 
@@ -2340,9 +2473,9 @@ namespace Arnafjordur.Editor
                 go.transform.SetParent(root.transform, true);
                 go.transform.position = hit.point + Vector3.up * halfHeight;
                 var woodItem = go.AddComponent<PickupItem>();
-                woodItem.Configure(isPlank ? "Plank" : "Driftwood", 0f, halfHeight, false, "Use", false);
+                woodItem.Configure(isPlank ? "Plank" : "Driftwood", 0f, halfHeight, false, "Stack", false);
                 woodItem.SetTwoHanded(true);   // carried crosswise in both hands, not dangling from one fist
-                go.AddComponent<Firewood>().Configure(isPlank ? 45f : 90f);
+                go.AddComponent<Firewood>().Configure(Firewood.DefaultBurnSeconds);
                 placed++;
             }
 
@@ -2701,6 +2834,12 @@ namespace Arnafjordur.Editor
             hud.Configure(partyController);
             EditorUtility.SetDirty(hud);
 
+            var doorUi = GetOrAdd<HouseDoorUi>(partyGo);
+            doorUi.Configure(partyController);
+            EditorUtility.SetDirty(doorUi);
+
+            GetOrAdd<ClueNoteUi>(partyGo);
+
             if (seaMine != null)
             {
                 var seaMineUi = GetOrAdd<SeaMineBombUi>(partyGo);
@@ -2787,6 +2926,9 @@ namespace Arnafjordur.Editor
                 ("VillageRoad_Mid", new Vector3(388.367f, -82.5f, 348.1f)),
                 ("BeachPathSouth_Mid", new Vector3(416.5f, -85.7f, 314.6f)),
                 ("BeachPathNorth_Mid", new Vector3(413.0f, -84.2f, 398.6f)),
+                ("BoathousePath_Mid", new Vector3(430.5f, -82f, 447.8f)),
+                ("BoathouseLanding", new Vector3(439.7f, -85.3f, 451.8f)),
+                ("GrassNorthBank", new Vector3(430f, -81.5f, 450f)),
                 ("Beach_Center", new Vector3(430f, -87f, 345f)),
             };
 
@@ -2972,9 +3114,11 @@ namespace Arnafjordur.Editor
                     Physics.SyncTransforms();
                 }
 
+                VillageHousesSetup.RenderPreviews(cam, previewDir, Shot);
                 cam.transform.SetPositionAndRotation(keepPos, keepRot);
                 cam.fieldOfView = keepFov;
                 RenderPocketItemsShot(cam, Path.Combine(previewDir, "village_pocket_items.png"));
+                RenderKeyCarryShot(cam, motors, Path.Combine(previewDir, "village_key_carry.png"));
             }
             catch (Exception e)
             {
@@ -3270,9 +3414,12 @@ namespace Arnafjordur.Editor
             Vector3 savedPlayerPos = player.transform.position;
             Quaternion savedPlayerRot = player.transform.rotation;
             PickupItem previousHeld = itemHolder.HeldItem;
+            bool hadPocketsBefore = player.TryGetComponent(out CharacterPockets _);
+            ClueNote spawnedTestNote = null;
 
             try
             {
+                rod.SetNextCatchNoteOverride(false);
                 string previewDir = Path.GetFullPath(Path.Combine(Application.dataPath, "../Docs/preview"));
                 Directory.CreateDirectory(previewDir);
 
@@ -3364,9 +3511,49 @@ namespace Arnafjordur.Editor
 
                 AssertCondition("Fishing rod", rod.State == FishingRod.RodState.Idle && rod.FishCaughtCount == 1,
                     $"Expected Idle state with FishCaughtCount == 1, got state={rod.State}, caught={rod.FishCaughtCount}.");
+
+                // Second cast: force the 20% clue note catch, verify it lands in pockets, cycles to hand, and reads on U.
+                rod.SetNextCatchNoteOverride(true);
+                AssertCondition("Fishing rod", itemHolder.TryUseHeldItem(), "Failed to re-cast FishingRod for note catch test.");
+                for (int i = 0; i < 7; i++) { rod.Tick(0.1f); itemHolder.PoseHeldItem(); rod.ApplyPose(); }
+                for (int i = 0; i < 10; i++) { rod.Tick(0.25f); itemHolder.PoseHeldItem(); rod.ApplyPose(); }
+                AssertCondition("Fishing rod", rod.State == FishingRod.RodState.Bite, $"Expected Bite on second cast, got {rod.State}.");
+                AssertCondition("Fishing rod", itemHolder.TryUseHeldItem() && rod.State == FishingRod.RodState.Reeling,
+                    $"Expected Reeling on second cast, got {rod.State}.");
+                for (int i = 0; i < 9; i++) { rod.Tick(0.1f); itemHolder.PoseHeldItem(); rod.ApplyPose(); }
+
+                spawnedTestNote = rod.LastCaughtNote;
+                CharacterPockets playerPockets = player.GetComponent<CharacterPockets>();
+                AssertCondition("Fishing rod", rod.HasCaughtNote && spawnedTestNote != null && playerPockets != null
+                    && spawnedTestNote.NoteText == FishingRod.WireClueText
+                    && playerPockets.Items.Contains(spawnedTestNote.GetComponent<PickupItem>()),
+                    "Expected caught clue note in the player's pockets with the wire clue text.");
+
+                itemHolder.DropHeldItem();
+                AssertCondition("Fishing rod", playerPockets.Cycle(itemHolder) && itemHolder.HeldItem == spawnedTestNote.GetComponent<PickupItem>(),
+                    "Expected cycling pockets to put the caught note into the player's hand.");
+                AssertCondition("Fishing rod", itemHolder.TryUseHeldItem() && ClueNoteUi.IsShowing(spawnedTestNote),
+                    "Expected using the held note (U) to open the note reader UI.");
+                ClueNoteUi.Close();
             }
             finally
             {
+                ClueNoteUi.Close();
+                if (spawnedTestNote != null)
+                {
+                    if (itemHolder != null && itemHolder.HeldItem == spawnedTestNote.GetComponent<PickupItem>())
+                    {
+                        itemHolder.ReleaseHeldItem();
+                    }
+
+                    UnityEngine.Object.DestroyImmediate(spawnedTestNote.gameObject);
+                }
+
+                if (!hadPocketsBefore && player != null && player.TryGetComponent(out CharacterPockets addedPockets))
+                {
+                    UnityEngine.Object.DestroyImmediate(addedPockets);
+                }
+
                 player.gameObject.SetActive(true);
                 if (cc != null) cc.enabled = false;
                 player.transform.SetPositionAndRotation(savedPlayerPos, savedPlayerRot);
@@ -3409,7 +3596,7 @@ namespace Arnafjordur.Editor
                 cam.fieldOfView = savedCamFov;
             }
 
-            Debug.Log("[VillageSceneSetup] Fishing rod verification: OK (trunk gate, pickup, beach cast, bite, reel 1 fish)");
+            Debug.Log("[VillageSceneSetup] Fishing rod verification: OK (trunk gate, pickup, beach cast, bite, reel 1 fish + 20% clue note -> pockets -> read on U)");
         }
 
         private static SeaMineBomb BuildSeaMineBomb(float seaLevel)
@@ -3630,10 +3817,40 @@ namespace Arnafjordur.Editor
                 switchLevers[s] = pivot.transform;
             }
 
-            // Modules 3..6: 4 sealed placeholder bays along the bottom row.
+            // Modules 3..6 along the bottom row: module 4 gets three keyholes, the rest stay sealed for now.
+            var keyholeLights = new Renderer[SeaMineBomb.KeySlotCount];
+            var keyholeKeys = new GameObject[SeaMineBomb.KeySlotCount];
+            Material keyholeOffMat = SeaMineMaterial("Mat_SeaMine_KeyholeOff", Color.Lerp(Palette.DeepFjordSlate, Color.black, 0.5f), 0.4f, 0.3f);
             for (int p = 0; p < 4; p++)
             {
                 float px = -0.18f + p * 0.12f;
+                if (p == 1)
+                {
+                    BoxPart(PrimitiveType.Cube, "KeyBay_4", panelRoot.transform, new Vector3(px, -0.132f, 0.029f), new Vector3(0.10f, 0.072f, 0.016f), ironMat);
+                    for (int k = 0; k < SeaMineBomb.KeySlotCount; k++)
+                    {
+                        float kx = px - 0.03f + k * 0.03f;
+                        BoxPart(PrimitiveType.Cylinder, $"KeyholeRim_{k}", panelRoot.transform, new Vector3(kx, -0.132f, 0.038f), new Vector3(0.022f, 0.004f, 0.022f), keyholeOffMat);
+                        Transform rim = FindChildByName(panelRoot.transform, $"KeyholeRim_{k}");
+                        rim.localRotation = Quaternion.Euler(90f, 0f, 0f);
+                        keyholeLights[k] = rim.GetComponent<Renderer>();
+                        BoxPart(PrimitiveType.Cylinder, $"KeyholeFace_{k}", panelRoot.transform, new Vector3(kx, -0.132f, 0.041f), new Vector3(0.016f, 0.003f, 0.016f), brassMat);
+                        FindChildByName(panelRoot.transform, $"KeyholeFace_{k}").localRotation = Quaternion.Euler(90f, 0f, 0f);
+                        BoxPart(PrimitiveType.Cube, $"KeyholeSlot_{k}", panelRoot.transform, new Vector3(kx, -0.132f, 0.0425f), new Vector3(0.003f, 0.009f, 0.002f), keyholeOffMat);
+
+                        // a turned key's bow sticking out, shown once that slot has a right key in it
+                        var turnedKey = new GameObject($"TurnedKey_{k}");
+                        turnedKey.transform.SetParent(panelRoot.transform, false);
+                        turnedKey.transform.localPosition = new Vector3(kx, -0.132f, 0.044f);
+                        BoxPart(PrimitiveType.Cube, "Shank", turnedKey.transform, new Vector3(0f, 0f, 0.006f), new Vector3(0.010f, 0.003f, 0.012f), brassMat);
+                        BoxPart(PrimitiveType.Cylinder, "Bow", turnedKey.transform, new Vector3(0f, 0f, 0.016f), new Vector3(0.016f, 0.0015f, 0.016f), brassMat);
+                        turnedKey.SetActive(false);
+                        keyholeKeys[k] = turnedKey;
+                    }
+
+                    continue;
+                }
+
                 BoxPart(PrimitiveType.Cube, $"LockedBay_{p + 3}", panelRoot.transform, new Vector3(px, -0.132f, 0.029f), new Vector3(0.10f, 0.072f, 0.016f), ironMat);
                 BoxPart(PrimitiveType.Cube, $"LockedSeal_{p + 3}", panelRoot.transform, new Vector3(px, -0.132f, 0.038f), new Vector3(0.05f, 0.018f, 0.008f), atomicMat);
             }
@@ -3648,6 +3865,7 @@ namespace Arnafjordur.Editor
                 ledGreenMat,
                 ledAmberMat,
                 new Vector3(-1.38f, 0f, 0f));
+            seaMine.ConfigureKeyholes(keyholeLights, keyholeKeys, keyholeOffMat);
             seaMine.ResetBomb();
 
             EditorUtility.SetDirty(mineGo);
@@ -3826,23 +4044,75 @@ namespace Arnafjordur.Editor
                 AssertCondition("Sea mine bomb", bomb.TrySubmitContacts() && bomb.IsContactsSolved && !bomb.CanDeactivate,
                     "Expected target contacts to solve Module 2 while Module 3 (wires) still blocks deactivation.");
 
-                // Module 3: no cutters = no cut; with cutters the right wire solves it, a wrong one detonates.
+                // Module 3: no cutters = no cut; with cutters the 3-wire sequence (White, Blue, Red) solves it.
                 PickupItem cutterStandIn = olavurHolder != null ? olavurHolder.HeldItem : null;
                 AssertCondition("Sea mine bomb", cutterStandIn != null, "Expected the inspecting character to hold an item to stand in for wire cutters.");
-                int wrongWire = (bomb.CorrectWireIndex + 1) % SeaMineBomb.WireCount;
-                AssertCondition("Sea mine bomb", !bomb.TryCutWire(bomb.CorrectWireIndex) && !bomb.IsWireCut(bomb.CorrectWireIndex),
+                int firstWire = bomb.CorrectWireSequence[0];
+                AssertCondition("Sea mine bomb", !bomb.TryCutWire(firstWire) && !bomb.IsWireCut(firstWire),
                     "Expected cutting a wire without wire cutters to do nothing.");
                 var tempCutters = cutterStandIn.gameObject.AddComponent<WireCutters>();
                 try
                 {
-                    AssertCondition("Sea mine bomb", bomb.TryCutWire(bomb.CorrectWireIndex) && bomb.IsWiresSolved && bomb.CanDeactivate && !bomb.IsExploded,
-                        "Expected the correct wire to solve Module 3 and unlock deactivation.");
+                    for (int w = 0; w < bomb.CorrectWireSequence.Count; w++)
+                    {
+                        bool cutOk = bomb.TryCutWire(bomb.CorrectWireSequence[w]);
+                        bool expectedSolved = w == bomb.CorrectWireSequence.Count - 1;
+                        AssertCondition("Sea mine bomb", cutOk && bomb.IsWiresSolved == expectedSolved && !bomb.IsExploded,
+                            $"Expected wire step {w + 1} to succeed (IsWiresSolved={bomb.IsWiresSolved}).");
+                    }
+
+                    AssertCondition("Sea mine bomb", bomb.IsWiresSolved && !bomb.CanDeactivate && !bomb.IsExploded,
+                        "Expected the wire sequence to solve Module 3 while Module 4 (keys) still blocks deactivation.");
+
+                    // Module 4: a beer is no key; a decoy key won't turn and flashes slot 1; three right keys fill slots 1-3.
+                    AssertCondition("Sea mine bomb", !bomb.TryUseKey() && bomb.KeysTurned == 0,
+                        "Expected the keyholes to refuse an item that isn't a key.");
+                    var testKeys = new List<PickupItem>();
+                    for (int k = 0; k < 4; k++)
+                    {
+                        var keyGo = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                        keyGo.name = k < 3 ? $"TestBombKey_{k + 1}" : "TestDecoyKey";
+                        keyGo.transform.localScale = new Vector3(0.02f, 0.06f, 0.005f);
+                        var keyItem = keyGo.AddComponent<PickupItem>();
+                        keyItem.Configure("Key", 0f, 0.01f, true, "Use", false);
+                        keyGo.AddComponent<BombKey>().Configure(k < 3);
+                        testKeys.Add(keyItem);
+                    }
+
+                    try
+                    {
+                        olavurHolder.TryPickup(testKeys[3]);
+                        AssertCondition("Sea mine bomb", !bomb.TryUseKey() && bomb.KeysTurned == 0 && bomb.KeyRejectSlot == 0 && bomb.KeyRejectFlashTimer > 0f
+                            && olavurHolder.HeldItem == testKeys[3],
+                            "Expected a decoy key to stay in hand, not turn, and flash slot 1 red.");
+                        bomb.Tick(SeaMineBomb.KeyRejectFlashSeconds + 0.1f);
+                        AssertCondition("Sea mine bomb", bomb.KeyRejectSlot == -1, "Expected the red flash to go out again.");
+                        for (int k = 0; k < 3; k++)
+                        {
+                            olavurHolder.TryPickup(testKeys[k]);
+                            AssertCondition("Sea mine bomb", bomb.TryUseKey() && bomb.KeysTurned == k + 1 && olavurHolder.HeldItem == null,
+                                $"Expected right key {k + 1} to turn in slot {k + 1}.");
+                        }
+
+                        AssertCondition("Sea mine bomb", bomb.IsKeysSolved && bomb.CanDeactivate, "Expected three turned keys to solve Module 4 and unlock deactivation.");
+                    }
+                    finally
+                    {
+                        if (cutterStandIn != null) olavurHolder.TryPickup(cutterStandIn);
+                    }
                     AssertCondition("Sea mine bomb", bomb.TryDeactivate() && bomb.IsDisarmed,
                         "Expected TryDeactivate() to disarm the bomb once active modules are solved.");
 
                     bomb.ResetBomb();
+                    int wrongWire = bomb.CorrectWireSequence[1]; // out of order (Blue before White) detonates
                     AssertCondition("Sea mine bomb", bomb.TryCutWire(wrongWire) && bomb.IsExploded && !bomb.IsWiresSolved,
-                        "Expected a wrong wire to detonate the mine (game lost).");
+                        "Expected a wrong wire or wrong order to detonate the mine (game lost).");
+
+                    // the test keys were handed back by ResetBomb; remove them from the scene
+                    foreach (BombKey leftover in UnityEngine.Object.FindObjectsByType<BombKey>(FindObjectsInactive.Include, FindObjectsSortMode.None))
+                    {
+                        if (leftover.name.StartsWith("Test")) UnityEngine.Object.DestroyImmediate(leftover.gameObject);
+                    }
                 }
                 finally
                 {
@@ -3873,7 +4143,7 @@ namespace Arnafjordur.Editor
                 cameraRig.SetOrbit(16f, 18f, 5.6f, snap: true);
             }
 
-            Debug.Log("[VillageSceneSetup] Sea mine bomb verification: OK (3600s timer, -60s penalty, TØNT + 10 contacts (946) + wires (right cut / wrong detonates), FP & third-person bending pose)");
+            Debug.Log("[VillageSceneSetup] Sea mine bomb verification: OK (3600s timer, -60s penalty, TØNT + 10 contacts (946) + wires (right cut / wrong detonates) + 3 keys (decoy refused), FP & third-person bending pose)");
         }
 
         private static void AssertCondition(string area, bool condition, string message)

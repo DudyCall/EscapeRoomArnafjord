@@ -33,6 +33,9 @@ namespace Arnafjordur.Characters
         private float[] _nextRoamTime = Array.Empty<float>();
         private Vector3 _roamCenter = Vector3.zero;
         private PickupItem _pendingPickup;
+        private WoodBonfire _pendingBonfire;
+        private Firewood _pendingWood;
+        private bool _pendingIgnite;
 
         /// <summary>Fired whenever the active character, companion mode, or carried item changes.</summary>
         public event Action StateChanged;
@@ -170,7 +173,7 @@ namespace Arnafjordur.Characters
                 return;
             }
 
-            _pendingPickup = null;
+            ClearPendingInteractions();
             CharacterMotor previous = ActiveCharacter;
             if (previous != null)
             {
@@ -290,13 +293,21 @@ namespace Arnafjordur.Characters
             CharacterItemHolder holder = ActiveItemHolder;
             if (holder == null || !holder.TryGetComponent(out CharacterPockets pockets)) return false;
             bool changed = pockets.Cycle(holder);
-            if (changed) StateChanged?.Invoke();
+            if (changed)
+            {
+                StateChanged?.Invoke();
+            }
+            else if (holder.HasItem && pockets.Items.Count > 0)
+            {
+                HouseDoor.Announce("Drop your held item [G] first to reach your pockets.");
+            }
+
             return changed;
         }
 
         public bool ToggleCarryItem()
         {
-            _pendingPickup = null;
+            ClearPendingInteractions();
             CharacterMotor active = ActiveCharacter;
             CharacterItemHolder holder = ActiveItemHolder;
             if (active == null || holder == null)
@@ -442,7 +453,7 @@ namespace Arnafjordur.Characters
             }
 
             moveInput.Normalize();
-            _pendingPickup = null;
+            ClearPendingInteractions();
             SeaMineBomb.Active?.CancelPendingApproach(active);
             Camera cam = ResolveCamera();
             Vector3 forward = cam != null ? cam.transform.forward : Vector3.forward;
@@ -480,6 +491,14 @@ namespace Arnafjordur.Characters
                 return;
             }
 
+            // Aiming the shotgun in first person: a click fires instead of walking.
+            CharacterItemHolder aimHolder = ActiveItemHolder;
+            if (aimHolder != null && aimHolder.HeldItem != null && aimHolder.HeldItem.TryGetComponent(out DoubleBarrelGun gun) && gun.IsAiming)
+            {
+                UseActiveItem();
+                return;
+            }
+
             Camera cam = ResolveCamera();
             if (cam == null)
             {
@@ -492,18 +511,71 @@ namespace Arnafjordur.Characters
 
             if (TryFindClickedSeaMine(ray, out SeaMineBomb clickedBomb))
             {
-                _pendingPickup = null;
+                ClearPendingInteractions();
                 clickedBomb.OnInteractRequested(active);
                 return;
             }
 
             CharacterItemHolder holder = ActiveItemHolder;
+            if (holder != null && holder.HeldItem != null)
+            {
+                if (holder.HeldItem.TryGetComponent(out Lighter _)
+                    && TryFindClickedWoodTarget(ray, out WoodBonfire igniteBonfire, out Firewood igniteWood)
+                    && ((igniteBonfire != null && !igniteBonfire.IsLit && !igniteBonfire.IsBurnedOut)
+                        || (igniteWood != null && !igniteWood.IsLit && !igniteWood.IsConsumed)))
+                {
+                    SeaMineBomb.Active?.CancelPendingApproach(active);
+                    Vector3 targetPos = igniteBonfire != null ? igniteBonfire.transform.position : igniteWood.transform.position;
+                    if (PlanarDistance(active.transform.position, targetPos) <= Lighter.DefaultIgnitionReach)
+                    {
+                        ClearPendingInteractions();
+                        active.Stop();
+                        if (holder.TryUseHeldItem()) StateChanged?.Invoke();
+                    }
+                    else
+                    {
+                        ClearPendingInteractions();
+                        _pendingBonfire = igniteBonfire;
+                        _pendingWood = igniteWood;
+                        _pendingIgnite = true;
+                        active.SetDestination(targetPos, sprint);
+                    }
+
+                    return;
+                }
+
+                if (holder.HeldItem.TryGetComponent(out Firewood heldWood)
+                    && TryFindClickedWoodTarget(ray, out WoodBonfire stackBonfire, out Firewood stackWood)
+                    && ((stackBonfire != null && !stackBonfire.IsBurnedOut)
+                        || (stackWood != null && stackWood != heldWood && !stackWood.IsConsumed)))
+                {
+                    SeaMineBomb.Active?.CancelPendingApproach(active);
+                    Vector3 targetPos = stackBonfire != null ? stackBonfire.transform.position : stackWood.transform.position;
+                    if (PlanarDistance(active.transform.position, targetPos) <= 2.1f)
+                    {
+                        ClearPendingInteractions();
+                        active.Stop();
+                        if (holder.StackHeldWoodOnto(stackBonfire, stackWood)) StateChanged?.Invoke();
+                    }
+                    else
+                    {
+                        ClearPendingInteractions();
+                        _pendingBonfire = stackBonfire;
+                        _pendingWood = stackWood;
+                        _pendingIgnite = false;
+                        active.SetDestination(targetPos, sprint);
+                    }
+
+                    return;
+                }
+            }
+
             if (holder != null && TryFindClickedPickupItem(ray, out PickupItem clickedItem))
             {
                 SeaMineBomb.Active?.CancelPendingApproach(active);
                 if (PlanarDistance(active.transform.position, clickedItem.transform.position) <= holder.PickupRange)
                 {
-                    _pendingPickup = null;
+                    ClearPendingInteractions();
                     active.Stop();
                     if (holder.TryPickup(clickedItem))
                     {
@@ -512,6 +584,7 @@ namespace Arnafjordur.Characters
                 }
                 else
                 {
+                    ClearPendingInteractions();
                     _pendingPickup = clickedItem;
                     active.SetDestination(clickedItem.transform.position, sprint);
                 }
@@ -521,22 +594,72 @@ namespace Arnafjordur.Characters
 
             if (TrySampleGroundPoint(ray, out Vector3 worldPoint))
             {
-                _pendingPickup = null;
+                ClearPendingInteractions();
                 SeaMineBomb.Active?.CancelPendingApproach(active);
                 active.SetDestination(worldPoint, sprint);
             }
         }
 
+        private void ClearPendingInteractions()
+        {
+            _pendingPickup = null;
+            _pendingBonfire = null;
+            _pendingWood = null;
+            _pendingIgnite = false;
+        }
+
         private void UpdatePendingPickup()
         {
+            CharacterMotor active = ActiveCharacter;
+            CharacterItemHolder holder = ActiveItemHolder;
+
+            if (_pendingBonfire != null || _pendingWood != null)
+            {
+                if (active == null || holder == null || holder.HeldItem == null)
+                {
+                    ClearPendingInteractions();
+                    return;
+                }
+
+                Vector3 targetPos = _pendingBonfire != null ? _pendingBonfire.transform.position : _pendingWood.transform.position;
+                float reach = _pendingIgnite ? Lighter.DefaultIgnitionReach : 2.1f;
+                if (PlanarDistance(active.transform.position, targetPos) <= reach)
+                {
+                    WoodBonfire b = _pendingBonfire;
+                    Firewood w = _pendingWood;
+                    bool ignite = _pendingIgnite;
+                    ClearPendingInteractions();
+                    active.Stop();
+
+                    if (ignite)
+                    {
+                        if (holder.HeldItem.GetComponent<Lighter>() != null && holder.TryUseHeldItem())
+                        {
+                            StateChanged?.Invoke();
+                        }
+                    }
+                    else if (holder.StackHeldWoodOnto(b, w))
+                    {
+                        StateChanged?.Invoke();
+                    }
+
+                    return;
+                }
+
+                if (!active.HasDestination)
+                {
+                    ClearPendingInteractions();
+                }
+
+                return;
+            }
+
             if (_pendingPickup == null)
             {
                 return;
             }
 
-            CharacterMotor active = ActiveCharacter;
-            CharacterItemHolder holder = ActiveItemHolder;
-            if (active == null || holder == null || _pendingPickup.IsHeld)
+            if (active == null || holder == null || _pendingPickup.IsHeld || !_pendingPickup.enabled)
             {
                 _pendingPickup = null;
                 return;
@@ -608,7 +731,7 @@ namespace Arnafjordur.Characters
                     }
 
                     PickupItem item = col.GetComponentInParent<PickupItem>();
-                    if (item != null && !item.IsHeld)
+                    if (item != null && item.enabled && !item.IsHeld)
                     {
                         clickedItem = item;
                         return true;
@@ -652,6 +775,61 @@ namespace Arnafjordur.Characters
             }
 
             clickedItem = null;
+            return false;
+        }
+
+        private static bool TryFindClickedWoodTarget(Ray ray, out WoodBonfire bonfire, out Firewood wood)
+        {
+            RaycastHit[] hits = Physics.RaycastAll(ray, 160f, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Collide);
+            if (hits != null && hits.Length > 0)
+            {
+                Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
+                for (int i = 0; i < hits.Length; i++)
+                {
+                    Collider col = hits[i].collider;
+                    if (col == null) continue;
+
+                    WoodBonfire hitBonfire = col.GetComponentInParent<WoodBonfire>();
+                    if (hitBonfire != null && !hitBonfire.IsBurnedOut && hitBonfire.WoodCount > 0)
+                    {
+                        bonfire = hitBonfire;
+                        wood = null;
+                        return true;
+                    }
+
+                    Firewood hitWood = col.GetComponentInParent<Firewood>();
+                    if (hitWood != null && !hitWood.IsHeld && !hitWood.IsConsumed)
+                    {
+                        bonfire = hitWood.Stack;
+                        wood = bonfire == null ? hitWood : null;
+                        return true;
+                    }
+
+                    if (!col.isTrigger && col.GetComponentInParent<CharacterMotor>() == null)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            if (TrySampleGroundPoint(ray, out Vector3 groundPoint))
+            {
+                WoodBonfire nearBonfire = WoodBonfire.FindNearestInRange(groundPoint, 0.75f);
+                if (nearBonfire != null)
+                {
+                    bonfire = nearBonfire;
+                    wood = null;
+                    return true;
+                }
+
+                if (WoodBonfire.TryFindStackTarget(groundPoint, groundPoint, null, 0.5f, 2.0f, out bonfire, out wood))
+                {
+                    return true;
+                }
+            }
+
+            bonfire = null;
+            wood = null;
             return false;
         }
 

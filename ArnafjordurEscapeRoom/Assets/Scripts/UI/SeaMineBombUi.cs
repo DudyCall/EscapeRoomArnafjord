@@ -13,12 +13,6 @@ namespace Arnafjordur.UI
     /// </summary>
     public sealed class SeaMineBombUi : MonoBehaviour
     {
-        private static readonly string[] QuickLetters =
-        {
-            "A", "E", "I", "K", "L", "N", "O",
-            "R", "S", "T", "U", "Æ", "Ø", "Å",
-        };
-
         [SerializeField] private SeaMineBomb bomb;
         [SerializeField] private PartyController party;
 
@@ -65,9 +59,18 @@ namespace Arnafjordur.UI
         private readonly UiWire[] _wires = new UiWire[SeaMineBomb.WireCount];
         private Text _wiresHint;
 
-        // Modules 4-6 placeholders
-        private readonly Image[] _placeholderStatusBgs = new Image[3];
-        private readonly Text[] _placeholderStatusLabels = new Text[3];
+        // Module 4: three keyholes
+        private Image _keysStatusBg;
+        private Text _keysStatusLabel;
+        private readonly Image[] _keySlotBgs = new Image[SeaMineBomb.KeySlotCount];
+        private readonly Image[] _keySlotRims = new Image[SeaMineBomb.KeySlotCount];
+        private readonly RectTransform[] _keyholes = new RectTransform[SeaMineBomb.KeySlotCount];
+        private readonly Text[] _keySlotLabels = new Text[SeaMineBomb.KeySlotCount];
+        private Text _keysHint;
+
+        // Modules 5-6 placeholders
+        private readonly Image[] _placeholderStatusBgs = new Image[2];
+        private readonly Text[] _placeholderStatusLabels = new Text[2];
 
         // Footer actions
         private Button _deactivateButton;
@@ -435,7 +438,7 @@ namespace Arnafjordur.UI
             BuildWordModuleBay(gridRt);
             BuildContactsModuleBay(gridRt);
             BuildWiresModuleBay(gridRt);
-            BuildPlaceholderModuleBay(gridRt, 3, "4. DECIPHER IV", "Pending Clue — Slot 4 of 6\n(Future cipher / lock mechanism)");
+            BuildKeysModuleBay(gridRt);
             BuildPlaceholderModuleBay(gridRt, 4, "5. DECIPHER V", "Pending Clue — Slot 5 of 6\n(Future cipher / lock mechanism)");
             BuildPlaceholderModuleBay(gridRt, 5, "6. DECIPHER VI", "Pending Clue — Slot 6 of 6\n(Future cipher / lock mechanism)");
 
@@ -459,7 +462,7 @@ namespace Arnafjordur.UI
             SetRect(resetBtn.GetComponent<RectTransform>(), new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(-336f, 0f), new Vector2(130f, 44f));
             resetBtn.onClick.AddListener(() => bomb?.ResetBomb());
 
-            _deactivateButton = CreateButton("Btn_Deactivate", footer.transform, "LOCKED (SOLVE 1 & 2)", out _deactivateBg, out _deactivateLabel, 17);
+            _deactivateButton = CreateButton("Btn_Deactivate", footer.transform, "LOCKED (SOLVE 1–4)", out _deactivateBg, out _deactivateLabel, 17);
             SetRect(_deactivateButton.GetComponent<RectTransform>(), new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(-14f, 0f), new Vector2(308f, 46f));
             _deactivateButton.onClick.AddListener(() => bomb?.TryDeactivate());
         }
@@ -475,52 +478,29 @@ namespace Arnafjordur.UI
                 int slotIdx = i;
                 float x = -129f + i * 86f;
 
-                Button upBtn = CreateButton($"Slot{i}_Up", bayRt, "▲", out Image upBg, out Text upLbl, 13);
+                Button upBtn = CreateButton($"Slot{i}_Up", bayRt, "▲", out Image upBg, out Text upLbl, 15);
                 upBg.color = Palette.WetBasalt;
                 upLbl.color = Palette.UiTextParchment;
-                SetRect(upBtn.GetComponent<RectTransform>(), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(x, 60f), new Vector2(70f, 22f));
+                SetRect(upBtn.GetComponent<RectTransform>(), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(x, 48f), new Vector2(72f, 26f));
                 upBtn.onClick.AddListener(() =>
                 {
                     _selectedWordSlot = slotIdx;
                     bomb?.CycleWordLetter(slotIdx, 1);
                 });
 
-                Button letterBtn = CreateButton($"Slot{i}_Val", bayRt, "A", out _slotBgs[i], out _slotLabels[i], 26);
+                Button letterBtn = CreateButton($"Slot{i}_Val", bayRt, "A", out _slotBgs[i], out _slotLabels[i], 28);
                 _slotLabels[i].fontStyle = FontStyle.Bold;
-                SetRect(letterBtn.GetComponent<RectTransform>(), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(x, 26f), new Vector2(70f, 42f));
+                SetRect(letterBtn.GetComponent<RectTransform>(), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(x, 5f), new Vector2(72f, 52f));
                 letterBtn.onClick.AddListener(() => _selectedWordSlot = slotIdx);
 
-                Button downBtn = CreateButton($"Slot{i}_Down", bayRt, "▼", out Image downBg, out Text downLbl, 13);
+                Button downBtn = CreateButton($"Slot{i}_Down", bayRt, "▼", out Image downBg, out Text downLbl, 15);
                 downBg.color = Palette.WetBasalt;
                 downLbl.color = Palette.UiTextParchment;
-                SetRect(downBtn.GetComponent<RectTransform>(), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(x, -8f), new Vector2(70f, 22f));
+                SetRect(downBtn.GetComponent<RectTransform>(), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(x, -38f), new Vector2(72f, 26f));
                 downBtn.onClick.AddListener(() =>
                 {
                     _selectedWordSlot = slotIdx;
                     bomb?.CycleWordLetter(slotIdx, -1);
-                });
-            }
-
-            // Quick keypad (2 rows x 7 buttons) for typing Ø and letters with mouse/touch
-            for (int k = 0; k < QuickLetters.Length; k++)
-            {
-                int row = k / 7;
-                int col = k % 7;
-                string glyph = QuickLetters[k];
-                char ch = glyph[0];
-                float x = -156f + col * 52f;
-                float y = -40f - row * 28f;
-
-                Button keyBtn = CreateButton($"Key_{glyph}", bayRt, glyph, out Image keyBg, out Text keyLbl, 14);
-                keyBg.color = Palette.WetBasalt;
-                keyLbl.color = Palette.UiTextParchment;
-                keyLbl.fontStyle = FontStyle.Bold;
-                SetRect(keyBtn.GetComponent<RectTransform>(), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(x, y), new Vector2(46f, 24f));
-                keyBtn.onClick.AddListener(() =>
-                {
-                    if (bomb == null || bomb.IsWordSolved) return;
-                    bomb.SetWordLetter(_selectedWordSlot, ch);
-                    _selectedWordSlot = Mathf.Min(3, _selectedWordSlot + 1);
                 });
             }
 
@@ -539,7 +519,7 @@ namespace Arnafjordur.UI
             {
                 int contactIdx = i;
                 float x = -171f + i * 38f;
-                Button swBtn = CreateButton($"Contact_{i + 1}", bayRt, $"C{i + 1}\nOFF", out _contactBgs[i], out _contactLabels[i], 14);
+                Button swBtn = CreateButton($"Contact_{i + 1}", bayRt, $"C{i + 1}\nOFF", out _contactBgs[i], out _contactLabels[i], 12);
                 _contactLabels[i].fontStyle = FontStyle.Bold;
                 SetRect(swBtn.GetComponent<RectTransform>(), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(x, 22f), new Vector2(34f, 92f));
                 swBtn.onClick.AddListener(() => bomb?.ToggleContact(contactIdx));
@@ -558,7 +538,7 @@ namespace Arnafjordur.UI
         /// <summary>Module 3: eight coloured wires running top to bottom; click one while holding wire cutters to cut it.</summary>
         private void BuildWiresModuleBay(RectTransform gridParent)
         {
-            GameObject bay = CreateModuleBayFrame(gridParent, "Module_3_Wires", "3. CUT THE RIGHT WIRE", out _wiresStatusBg, out _wiresStatusLabel);
+            GameObject bay = CreateModuleBayFrame(gridParent, "Module_3_Wires", "3. CUT 3 WIRES IN ORDER", out _wiresStatusBg, out _wiresStatusLabel);
             RectTransform bayRt = bay.GetComponent<RectTransform>();
 
             // recessed backing plate behind the wiring
@@ -616,9 +596,49 @@ namespace Arnafjordur.UI
             SetRect(_wiresHint.rectTransform, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 14f), new Vector2(380f, 56f));
         }
 
+        /// <summary>Module 4: three round keyholes; click one while holding a key to try it in the next empty slot.</summary>
+        private void BuildKeysModuleBay(RectTransform gridParent)
+        {
+            GameObject bay = CreateModuleBayFrame(gridParent, "Module_4_Keys", "4. THREE KEYS", out _keysStatusBg, out _keysStatusLabel);
+            RectTransform bayRt = bay.GetComponent<RectTransform>();
+            Color steel = Color.Lerp(Palette.WetBasalt, Palette.HarbourConcrete, 0.35f);
+            Color hole = Color.Lerp(Palette.DeepFjordSlate, Color.black, 0.65f);
+
+            for (int i = 0; i < SeaMineBomb.KeySlotCount; i++)
+            {
+                float x = -120f + i * 120f;
+                // lit rim (dark / green / red) around a steel lock face with a keyhole
+                GameObject rim = CreatePanel($"KeySlot_{i + 1}", bayRt, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(x, 20f), new Vector2(92f, 92f), Palette.WetBasalt);
+                _keySlotRims[i] = rim.GetComponent<Image>();
+                Button btn = rim.AddComponent<Button>();
+                btn.targetGraphic = _keySlotRims[i];
+                btn.onClick.AddListener(() => bomb?.TryUseKey());
+
+                GameObject face = CreatePanel("Face", rim.GetComponent<RectTransform>(), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(78f, 78f), steel);
+                _keySlotBgs[i] = face.GetComponent<Image>();
+                _keySlotBgs[i].raycastTarget = false;
+
+                // keyhole: round top and a slot below; the whole group turns 90° when a right key turns it
+                var keyhole = new GameObject("Keyhole", typeof(RectTransform)).GetComponent<RectTransform>();
+                keyhole.SetParent(face.transform, false);
+                keyhole.sizeDelta = new Vector2(40f, 40f);
+                _keyholes[i] = keyhole;
+                GameObject top = CreatePanel("Round", keyhole, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0f, 7f), new Vector2(16f, 16f), hole);
+                top.GetComponent<Image>().raycastTarget = false;
+                GameObject bottom = CreatePanel("Slot", keyhole, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0f, -6f), new Vector2(7f, 22f), hole);
+                bottom.GetComponent<Image>().raycastTarget = false;
+
+                _keySlotLabels[i] = CreateText("SlotLabel", bayRt, 13, TextAnchor.MiddleCenter, Palette.UiTextParchment, FontStyle.Bold);
+                SetRect(_keySlotLabels[i].rectTransform, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(x, -46f), new Vector2(116f, 34f));
+            }
+
+            _keysHint = CreateText("KeysHint", bayRt, 13, TextAnchor.MiddleCenter, Palette.SeaFoam, FontStyle.Normal);
+            SetRect(_keysHint.rectTransform, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 14f), new Vector2(380f, 48f));
+        }
+
         private void BuildPlaceholderModuleBay(RectTransform gridParent, int moduleIndex, string titleText, string bodyText)
         {
-            int idx = moduleIndex - 3;
+            int idx = moduleIndex - 4;
             GameObject bay = CreateModuleBayFrame(
                 gridParent,
                 $"Module_{moduleIndex + 1}_Placeholder",
@@ -789,7 +809,7 @@ namespace Arnafjordur.UI
             bool hasCutters = bomb.InspectorHasWireCutters;
             _wiresStatusBg.color = bomb.IsWiresSolved ? Palette.UiConfirmGreen : (bomb.IsExploded ? Palette.BoathouseRust : Palette.UiAccentAmber);
             _wiresStatusLabel.color = bomb.IsExploded && !bomb.IsWiresSolved ? Palette.UiTextParchment : Palette.DeepFjordSlate;
-            _wiresStatusLabel.text = bomb.IsWiresSolved ? "SOLVED" : (bomb.IsExploded ? "DETONATED" : "ARMED");
+            _wiresStatusLabel.text = bomb.IsWiresSolved ? "SOLVED" : (bomb.IsExploded ? "DETONATED" : $"{bomb.WiresCutInSequence}/{bomb.CorrectWireSequence.Count} CUT");
             for (int i = 0; i < SeaMineBomb.WireCount; i++)
             {
                 bool cut = bomb.IsWireCut(i);
@@ -799,11 +819,33 @@ namespace Arnafjordur.UI
             _wiresHint.text = bomb.IsWiresSolved
                 ? "Circuit dead. Module 3 is safe."
                 : (hasCutters
-                    ? "Click a wire to cut it.\nOnly ONE is right — a wrong wire detonates the mine!"
-                    : "Hold WIRE CUTTERS to cut a wire.\nOnly ONE is right — a wrong wire detonates the mine!");
+                    ? "Cut 3 wires in the right order.\nWrong wire or order detonates the mine!"
+                    : "Hold WIRE CUTTERS to cut wires.\nCut 3 in order — wrong move detonates!");
             _wiresHint.color = hasCutters || bomb.IsWiresSolved ? Palette.SeaFoam : Palette.UiAccentAmber;
 
-            // Modules 4-6 placeholders
+            // Module 4
+            _keysStatusBg.color = bomb.IsKeysSolved ? Palette.UiConfirmGreen : Palette.UiAccentAmber;
+            _keysStatusLabel.color = Palette.DeepFjordSlate;
+            _keysStatusLabel.text = bomb.IsKeysSolved ? "SOLVED" : $"{bomb.KeysTurned}/{SeaMineBomb.KeySlotCount} KEYS";
+            for (int i = 0; i < SeaMineBomb.KeySlotCount; i++)
+            {
+                bool turned = i < bomb.KeysTurned;
+                bool refused = i == bomb.KeyRejectSlot && bomb.KeyRejectFlashTimer > 0f;
+                bool flashOn = refused && Mathf.Repeat(bomb.KeyRejectFlashTimer, 0.3f) > 0.1f;
+                _keySlotRims[i].color = turned ? Palette.UiConfirmGreen : (flashOn ? new Color(0.9f, 0.16f, 0.12f, 1f) : Color.Lerp(Palette.DeepFjordSlate, Color.black, 0.3f));
+                _keyholes[i].localRotation = Quaternion.Euler(0f, 0f, turned ? -90f : (refused ? 8f * Mathf.Sin(bomb.KeyRejectFlashTimer * 40f) : 0f));
+                _keySlotLabels[i].text = turned ? $"SLOT {i + 1}\nTURNED" : (refused ? $"SLOT {i + 1}\nWON'T TURN" : $"SLOT {i + 1}");
+                _keySlotLabels[i].color = turned ? Palette.UiConfirmGreen : (refused ? Palette.UiAccentAmber : Palette.UiTextParchment);
+            }
+
+            _keysHint.text = bomb.IsKeysSolved
+                ? "All three keys turned. Module 4 is open."
+                : (bomb.InspectorHoldsKey
+                    ? $"Click a keyhole to try your key in slot {bomb.KeysTurned + 1}."
+                    : "Hold one of the three keys and click a keyhole.");
+            _keysHint.color = bomb.InspectorHoldsKey || bomb.IsKeysSolved ? Palette.SeaFoam : Palette.UiAccentAmber;
+
+            // Modules 5-6 placeholders
             for (int i = 0; i < _placeholderStatusBgs.Length; i++)
             {
                 _placeholderStatusBgs[i].color = bomb.IsDisarmed ? Palette.UiConfirmGreen : Palette.WetBasalt;
@@ -835,7 +877,7 @@ namespace Arnafjordur.UI
             {
                 _deactivateBg.color = Palette.WetBasalt;
                 _deactivateLabel.color = Palette.UiTextParchment;
-                _deactivateLabel.text = "LOCKED (SOLVE 1 & 2)";
+                _deactivateLabel.text = "LOCKED (SOLVE 1–4)";
             }
         }
 

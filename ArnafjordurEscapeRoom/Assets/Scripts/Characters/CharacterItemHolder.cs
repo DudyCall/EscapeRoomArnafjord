@@ -354,6 +354,10 @@ namespace Arnafjordur.Characters
             Quaternion rot = baseRot * Quaternion.Euler(HeldItem.HeldEulerOffset);
             Vector3 pos = handBone.TransformPoint(gripLocal) + axis * HeldItem.GripBelowCentre + baseRot * HeldItem.HeldLocalOffset;
             HeldItem.transform.SetPositionAndRotation(pos, rot);
+            if (HeldItem.TryGetComponent(out HouseKey houseKey))
+            {
+                houseKey.SyncTagPose();
+            }
         }
 
         /// <summary>
@@ -416,7 +420,7 @@ namespace Arnafjordur.Characters
 
             if (HasItem)
             {
-                DropHeldItem();
+                DropHeldItemInternal(allowWoodStack: false);
             }
 
             _isDrinking = false;
@@ -464,11 +468,50 @@ namespace Arnafjordur.Characters
             return item;
         }
 
-        public PickupItem DropHeldItem()
+        public PickupItem DropHeldItem() => DropHeldItemInternal(allowWoodStack: true);
+
+        /// <summary>Stacks currently held firewood onto an existing <see cref="WoodBonfire"/> or loose <see cref="Firewood"/>.</summary>
+        public bool StackHeldWoodOnto(WoodBonfire bonfire, Firewood targetWood)
+        {
+            if (HeldItem == null || !HeldItem.TryGetComponent(out Firewood heldWood))
+            {
+                return false;
+            }
+
+            if (bonfire == null && (targetWood == null || targetWood == heldWood))
+            {
+                return false;
+            }
+
+            _isDrinking = false;
+            _sipElapsed = 0f;
+            _currentSip = 0f;
+            _hasLastSolvedPose = false;
+            _cachedAnimSwing = Vector3.zero;
+
+            HeldItem = null;
+            WoodBonfire.StackOnto(bonfire, targetWood, heldWood);
+            HeldItemChanged?.Invoke(null);
+            return true;
+        }
+
+        private PickupItem DropHeldItemInternal(bool allowWoodStack)
         {
             if (HeldItem == null)
             {
                 return null;
+            }
+
+            if (allowWoodStack && HeldItem.TryGetComponent(out Firewood heldWood))
+            {
+                Vector3 dropOrigin = ClampDropPosition(transform.position + transform.forward * dropForwardDistance);
+                if (WoodBonfire.TryFindStackTarget(dropOrigin, transform.position, heldWood, 1.35f, 2.2f,
+                    out WoodBonfire bonfire, out Firewood targetWood))
+                {
+                    PickupItem stacked = HeldItem;
+                    StackHeldWoodOnto(bonfire, targetWood);
+                    return stacked;
+                }
             }
 
             _isDrinking = false;
@@ -481,9 +524,20 @@ namespace Arnafjordur.Characters
             Vector3 dropXZ = FindDropSpotXZ(item);
             float groundY = SampleGroundY(dropXZ);
 
-            Quaternion dropRot = Quaternion.Euler(0f, transform.eulerAngles.y, 0f);
-            item.transform.rotation = dropRot;
-            float groundOffset = item.GetGroundOffset();
+            Quaternion dropRot;
+            float groundOffset;
+            if (item.TryGetComponent(out Firewood dropWood))
+            {
+                dropRot = dropWood.GetFlatDropRotation(transform.eulerAngles.y);
+                groundOffset = dropWood.HalfThickness;
+            }
+            else
+            {
+                dropRot = Quaternion.Euler(0f, transform.eulerAngles.y, 0f);
+                item.transform.rotation = dropRot;
+                groundOffset = item.GetGroundOffset();
+            }
+
             Vector3 finalPos = new Vector3(dropXZ.x, groundY + groundOffset, dropXZ.z);
 
             item.OnDropped(GetOrCreateWorldItemsRoot());

@@ -1,7 +1,9 @@
 """
 Where the players may walk in the playable Árnafjørður village scene (Arnafjordur_Village.unity):
 the church driveway and parking bay, the road down over the Stórá bridge and through the village,
-three footpaths, the grass between the houses below the street, and the beach at the head of the fjord. Everything else (the mountain road, the
+the footpaths (two down to the beach, one from the end of the road to the black boathouse, OSM building 50, whose
+stairs and door landing VillageHousesSetup builds), the grass between the houses below the street (north along the
+bank as far as the boathouse), and the beach at the head of the fjord. Everything else (the mountain road, the
 slopes, the sea) is left out, so the players cannot get there.
 
 Reads the terrain and road straight from TunnelExit.blend so the result always matches the
@@ -38,6 +40,7 @@ CELL = 0.5
 GRASS_X_MIN = 375.0            # the grass slope between the village street and the beach
 GRASS_HOUSE_CLEARANCE = 0.5    # houses have colliders; this only keeps the outline off their walls
 GRASS_ABOVE_ROAD = 0.4         # seaward ground up to this much above the street (the Unity builder banks it up to the road edge)
+GRASS_Z_MAX = 452.0            # the grass runs on along the bank past the end of the road, up to the boathouse
 
 
 # ------------------------------------------------------------------ meshes from the open .blend, in Unity coordinates
@@ -183,6 +186,9 @@ footpaths = {
     "BeachPathSouth": [(395.45, 315.2), (400.5, 315.6), (408.0, 315.3), (416.5, 314.6), (423.5, 315.4), (430.0, 317.5)],
     # further along the street, a second way down between the houses
     "BeachPathNorth": [(400.75, 399.2), (406.5, 399.4), (413.0, 398.6), (419.0, 396.5), (424.0, 393.5)],
+    # from the end of the road along the bank to the top of the boathouse stairs (VillageHousesSetup finds the
+    # stair top from the terrain; it lands within a few cm of the last point here)
+    "BoathousePath": [(423.65, 445.17), (427.0, 446.4), (430.5, 447.8), (433.8, 449.2), (436.39, 450.28)],
 }
 for name, pts in footpaths.items():
     for x, z in densify(pts, 1.0):
@@ -276,11 +282,12 @@ beach, area = zone_outline(mask, xs, zs, (430.0, 317.5))
 # ------------------------------------------------------------------ 5. the grass between the houses below the street, down to the beach
 road_pts = np.array([(x, z, road_y(x, z)) for x, z in densify(road_line, 1.0)])
 gxs = np.arange(GRASS_X_MIN, 470.0 + CELL, CELL)
-Gg = np.array([[terrain_y(x, z) - SEA for x in gxs] for z in zs])
+gzs = np.arange(BEACH_Z_MIN, GRASS_Z_MAX + CELL, CELL)
+Gg = np.array([[terrain_y(x, z) - SEA for x in gxs] for z in gzs])
 gmask = Gg >= BEACH_MIN_H
 ggz, ggx = np.gradient(Gg, CELL)
 gmask &= np.hypot(ggx, ggz) < math.tan(math.radians(32.0))
-for iz, z in enumerate(zs):
+for iz, z in enumerate(gzs):
     for ix, x in enumerate(gxs):
         if not gmask[iz, ix]:
             continue
@@ -290,7 +297,7 @@ for iz, z in enumerate(zs):
         if (not seaward or Gg[iz, ix] + SEA > road_pts[k, 2] + GRASS_ABOVE_ROAD or house_distance(x, z) < GRASS_HOUSE_CLEARANCE
                 or line_distance(x, z, RIVER) < BEACH_RIVER_CLEARANCE):
             gmask[iz, ix] = False
-grass, grass_area = zone_outline(gmask, gxs, zs, (430.0, 317.5))
+grass, grass_area = zone_outline(gmask, gxs, gzs, (430.0, 317.5))
 
 church_parking = [
     (397.8, 280.0),

@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Events;
@@ -102,6 +103,9 @@ namespace Arnafjordur.Characters
         /// <summary>Invoked whenever a character uses this item.</summary>
         public UnityEvent<CharacterItemHolder> OnUsed => onUsed;
 
+        /// <summary>Fired right after a character picks up this item.</summary>
+        public event Action<CharacterItemHolder> PickedUp;
+
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
         private static void ResetRegistry()
         {
@@ -137,6 +141,12 @@ namespace Arnafjordur.Characters
             useVerb = itemUseVerb;
             drinkSipOnUse = sipOnUse;
             EnsureInteractionCollider();
+        }
+
+        /// <summary>Updates the name shown in the HUD (e.g. the shotgun's shells left).</summary>
+        public void SetDisplayName(string itemName)
+        {
+            displayName = itemName;
         }
 
         /// <summary>Updates the action verb shown in the HUD while this item is held.</summary>
@@ -228,6 +238,7 @@ namespace Arnafjordur.Characters
             Holder = newHolder;
             SetCollidersEnabled(false);
             SyncShadowWithHolder(newHolder);
+            PickedUp?.Invoke(newHolder);
         }
 
         internal void OnDropped(Transform worldParent)
